@@ -21,6 +21,7 @@ LABEL org.opencontainers.image.title="MailPilot" \
 WORKDIR /app
 RUN groupadd --gid 10001 autoreply && useradd --uid 10001 --gid autoreply --shell /usr/sbin/nologin --create-home autoreply
 COPY --from=builder --chown=autoreply:autoreply /app/node_modules ./node_modules
+COPY --from=builder --chown=autoreply:autoreply /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=builder --chown=autoreply:autoreply /app/apps/api/dist ./apps/api/dist
 COPY --from=builder --chown=autoreply:autoreply /app/apps/api/package.json ./apps/api/package.json
 COPY --from=builder --chown=autoreply:autoreply /app/apps/web/dist ./apps/web/dist
