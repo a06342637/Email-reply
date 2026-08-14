@@ -50,12 +50,14 @@ export class BackupService {
           email: string;
           displayName: string;
           status: string;
+          provider?: string;
         }>
-      ).map(({ id, email, displayName, status }) => ({
+      ).map(({ id, email, displayName, status, provider }) => ({
         id,
         email,
         displayName,
         status,
+        provider: provider ?? "MICROSOFT",
       })),
       tasks: (
         data.tables.tasks as Array<{
@@ -129,8 +131,31 @@ export class BackupService {
               },
             });
           }
+          for (const row of tables.googleConfig ? [tables.googleConfig] : []) {
+            const secret = row.clientSecretPlain as string;
+            await tx.googleAppConfig.upsert({
+              where: { id: "singleton" },
+              create: {
+                id: "singleton",
+                clientId: row.clientId,
+                clientSecretEncrypted: await this.crypto.encryptString(
+                  secret,
+                  "google-client-secret",
+                ),
+              },
+              update: {
+                clientId: row.clientId,
+                clientSecretEncrypted: await this.crypto.encryptString(
+                  secret,
+                  "google-client-secret",
+                ),
+              },
+            });
+          }
           for (const row of tables.mailboxes ?? []) {
             const mailboxRow = this.withDates(row);
+            delete mailboxRow.tokenCachePlain;
+            const provider = row.provider === "GOOGLE" ? "GOOGLE" : "MICROSOFT";
             const restoredMailboxStatus = [
               "CONNECTED",
               "AUTH_REQUIRED",
@@ -143,9 +168,12 @@ export class BackupService {
               where: { id: row.id },
               create: {
                 ...mailboxRow,
+                provider,
                 tokenCacheEncrypted: await this.crypto.encryptString(
                   row.tokenCachePlain,
-                  `msal:${row.id}`,
+                  provider === "GOOGLE"
+                    ? `google-token:${row.id}`
+                    : `msal:${row.id}`,
                 ),
                 status: restoredMailboxStatus,
                 createdAt: this.date(row.createdAt)!,
@@ -153,9 +181,12 @@ export class BackupService {
               },
               update: {
                 ...mailboxRow,
+                provider,
                 tokenCacheEncrypted: await this.crypto.encryptString(
                   row.tokenCachePlain,
-                  `msal:${row.id}`,
+                  provider === "GOOGLE"
+                    ? `google-token:${row.id}`
+                    : `msal:${row.id}`,
                 ),
                 status: restoredMailboxStatus,
                 createdAt: this.date(row.createdAt)!,
@@ -239,7 +270,7 @@ export class BackupService {
                 },
               },
               create: {
-                ...this.withDates(row),
+                ...this.withoutPlainCursorFields(row),
                 deltaLinkEncrypted: row.deltaLinkPlain
                   ? await this.crypto.encryptString(
                       row.deltaLinkPlain,
@@ -254,7 +285,7 @@ export class BackupService {
                   : null,
               },
               update: {
-                ...this.withDates(row),
+                ...this.withoutPlainCursorFields(row),
                 deltaLinkEncrypted: row.deltaLinkPlain
                   ? await this.crypto.encryptString(
                       row.deltaLinkPlain,
@@ -265,6 +296,40 @@ export class BackupService {
                   ? await this.crypto.encryptString(
                       row.nextLinkPlain,
                       `delta:${row.mailboxId}:${row.folder}`,
+                    )
+                  : null,
+              },
+            });
+          for (const row of tables.gmailCursors ?? [])
+            await tx.gmailCursor.upsert({
+              where: { mailboxId: row.mailboxId },
+              create: {
+                ...this.withoutPlainGmailCursorFields(row),
+                historyIdEncrypted: row.historyIdPlain
+                  ? await this.crypto.encryptString(
+                      row.historyIdPlain,
+                      `gmail-history:${row.mailboxId}`,
+                    )
+                  : null,
+                pageTokenEncrypted: row.pageTokenPlain
+                  ? await this.crypto.encryptString(
+                      row.pageTokenPlain,
+                      `gmail-page:${row.mailboxId}`,
+                    )
+                  : null,
+              },
+              update: {
+                ...this.withoutPlainGmailCursorFields(row),
+                historyIdEncrypted: row.historyIdPlain
+                  ? await this.crypto.encryptString(
+                      row.historyIdPlain,
+                      `gmail-history:${row.mailboxId}`,
+                    )
+                  : null,
+                pageTokenEncrypted: row.pageTokenPlain
+                  ? await this.crypto.encryptString(
+                      row.pageTokenPlain,
+                      `gmail-page:${row.mailboxId}`,
                     )
                   : null,
               },
@@ -357,9 +422,11 @@ export class BackupService {
   private async collect() {
     const [
       microsoftConfig,
+      googleConfig,
       mailboxes,
       tasks,
       cursors,
+      gmailCursors,
       rules,
       templates,
       revisions,
@@ -376,9 +443,11 @@ export class BackupService {
       (tx) =>
         Promise.all([
           tx.microsoftAppConfig.findUnique({ where: { id: "singleton" } }),
+          tx.googleAppConfig.findUnique({ where: { id: "singleton" } }),
           tx.mailbox.findMany(),
           tx.autoReplyTask.findMany(),
           tx.folderCursor.findMany(),
+          tx.gmailCursor.findMany(),
           tx.replyRule.findMany(),
           tx.replyTemplate.findMany(),
           tx.templateRevision.findMany(),
@@ -409,12 +478,23 @@ export class BackupService {
               ),
             }
           : null,
+        googleConfig: googleConfig
+          ? {
+              clientId: googleConfig.clientId,
+              clientSecretPlain: await this.crypto.decryptString(
+                googleConfig.clientSecretEncrypted,
+                "google-client-secret",
+              ),
+            }
+          : null,
         mailboxes: await Promise.all(
           mailboxes.map(async ({ tokenCacheEncrypted, ...row }) => ({
             ...row,
             tokenCachePlain: await this.crypto.decryptString(
               tokenCacheEncrypted,
-              `msal:${row.id}`,
+              row.provider === "GOOGLE"
+                ? `google-token:${row.id}`
+                : `msal:${row.id}`,
             ),
           })),
         ),
@@ -433,6 +513,25 @@ export class BackupService {
                 ? await this.crypto.decryptString(
                     nextLinkEncrypted,
                     `delta:${row.mailboxId}:${row.folder}`,
+                  )
+                : null,
+            }),
+          ),
+        ),
+        gmailCursors: await Promise.all(
+          gmailCursors.map(
+            async ({ historyIdEncrypted, pageTokenEncrypted, ...row }) => ({
+              ...row,
+              historyIdPlain: historyIdEncrypted
+                ? await this.crypto.decryptString(
+                    historyIdEncrypted,
+                    `gmail-history:${row.mailboxId}`,
+                  )
+                : null,
+              pageTokenPlain: pageTokenEncrypted
+                ? await this.crypto.decryptString(
+                    pageTokenEncrypted,
+                    `gmail-page:${row.mailboxId}`,
                   )
                 : null,
             }),
@@ -606,12 +705,20 @@ export class BackupService {
       if (!Array.isArray(tables[key]))
         throw new AppError("BACKUP_INVALID", `备份缺少有效数据表：${key}`, 400);
     }
+    if (
+      tables.gmailCursors !== undefined &&
+      !Array.isArray(tables.gmailCursors)
+    )
+      throw new AppError("BACKUP_INVALID", "备份包含无效的 Gmail 游标表", 400);
 
     const rows = (key: string) => tables[key] as Array<Record<string, any>>;
     const duplicates = (values: string[]) =>
       values.filter((value, index) => values.indexOf(value) !== index);
     const duplicateIds = duplicates(
-      requiredArrays.flatMap((key) =>
+      [
+        ...requiredArrays,
+        ...(tables.gmailCursors ? ["gmailCursors"] : []),
+      ].flatMap((key) =>
         rows(key).map((row) => `${key}:${String(row.id ?? row.key ?? "")}`),
       ),
     );
@@ -623,11 +730,32 @@ export class BackupService {
       );
 
     const mailboxIds = new Set(rows("mailboxes").map((row) => row.id));
+    const mailboxProviders = new Map(
+      rows("mailboxes").map((row) => [
+        row.id,
+        row.provider === "GOOGLE" ? "GOOGLE" : "MICROSOFT",
+      ]),
+    );
     const taskIds = new Set(rows("tasks").map((row) => row.id));
     const templateIds = new Set(rows("templates").map((row) => row.id));
     const revisionIds = new Set(rows("revisions").map((row) => row.id));
     const ruleIds = new Set(rows("rules").map((row) => row.id));
     const receiptIds = new Set(rows("receipts").map((row) => row.id));
+    for (const row of rows("mailboxes")) {
+      const provider = row.provider ?? "MICROSOFT";
+      if (!["MICROSOFT", "GOOGLE"].includes(provider))
+        throw new AppError(
+          "BACKUP_PROVIDER_INVALID",
+          "备份包含不支持的邮箱提供商",
+          400,
+        );
+      if (typeof row.tokenCachePlain !== "string")
+        throw new AppError(
+          "BACKUP_TOKEN_INVALID",
+          "备份中的邮箱授权缓存无效",
+          400,
+        );
+    }
     const requireReference = (
       source: string,
       row: Record<string, any>,
@@ -648,8 +776,26 @@ export class BackupService {
       requireReference("tasks", row, "mailboxId", mailboxIds);
       requireReference("tasks", row, "defaultTemplateId", templateIds, true);
     }
-    for (const row of rows("cursors"))
+    for (const row of rows("cursors")) {
       requireReference("cursors", row, "mailboxId", mailboxIds);
+      if (mailboxProviders.get(row.mailboxId) !== "MICROSOFT")
+        throw new AppError(
+          "BACKUP_PROVIDER_CURSOR_MISMATCH",
+          "Google 邮箱不能恢复 Microsoft Delta 游标",
+          400,
+        );
+    }
+    for (const row of (tables.gmailCursors ?? []) as Array<
+      Record<string, any>
+    >) {
+      requireReference("gmailCursors", row, "mailboxId", mailboxIds);
+      if (mailboxProviders.get(row.mailboxId) !== "GOOGLE")
+        throw new AppError(
+          "BACKUP_PROVIDER_CURSOR_MISMATCH",
+          "Microsoft 邮箱不能恢复 Gmail History 游标",
+          400,
+        );
+    }
     for (const row of rows("revisions"))
       requireReference("revisions", row, "templateId", templateIds);
     for (const row of rows("assets"))
@@ -768,6 +914,20 @@ export class BackupService {
       )
         delete clean[key];
     }
+    return clean;
+  }
+
+  private withoutPlainCursorFields(row: Record<string, any>): any {
+    const clean = this.withDates(row);
+    delete clean.deltaLinkPlain;
+    delete clean.nextLinkPlain;
+    return clean;
+  }
+
+  private withoutPlainGmailCursorFields(row: Record<string, any>): any {
+    const clean = this.withDates(row);
+    delete clean.historyIdPlain;
+    delete clean.pageTokenPlain;
     return clean;
   }
 }

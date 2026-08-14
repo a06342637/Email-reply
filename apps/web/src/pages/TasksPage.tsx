@@ -120,7 +120,7 @@ export function TasksPage() {
                       </span>
                       {t.graphBackoffUntil && (
                         <span>
-                          Graph 退避至 <b>{fmtDate(t.graphBackoffUntil)}</b>
+                          服务退避至 <b>{fmtDate(t.graphBackoffUntil)}</b>
                         </span>
                       )}
                     </div>

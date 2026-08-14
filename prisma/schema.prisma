@@ -14,6 +14,11 @@ enum MailboxStatus {
   REMOVED
 }
 
+enum MailProvider {
+  MICROSOFT
+  GOOGLE
+}
+
 enum TaskStatus {
   DRAFT
   INITIALIZING
@@ -109,8 +114,16 @@ model MicrosoftAppConfig {
   updatedAt             DateTime  @updatedAt
 }
 
+model GoogleAppConfig {
+  id                    String   @id @default("singleton")
+  clientId              String
+  clientSecretEncrypted String
+  updatedAt             DateTime @updatedAt
+}
+
 model OAuthState {
   id                String   @id
+  provider          MailProvider @default(MICROSOFT)
   stateHash         String   @unique
   verifierEncrypted String
   redirectAfter     String?
@@ -121,6 +134,7 @@ model OAuthState {
 model Mailbox {
   id                  String           @id @default(uuid())
   email               String           @unique
+  provider            MailProvider     @default(MICROSOFT)
   displayName         String
   tenantId            String?
   accountType         String           @default("UNKNOWN")
@@ -134,8 +148,11 @@ model Mailbox {
   updatedAt           DateTime         @updatedAt
   task                AutoReplyTask?
   cursors             FolderCursor[]
+  gmailCursor         GmailCursor?
   receipts            MessageReceipt[]
   logs                ProcessingLog[]
+
+  @@index([provider, status])
 }
 
 model AutoReplyTask {
@@ -179,6 +196,18 @@ model FolderCursor {
   mailbox            Mailbox    @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
 
   @@unique([mailboxId, folder])
+}
+
+model GmailCursor {
+  id                 String   @id @default(uuid())
+  mailboxId          String   @unique
+  historyIdEncrypted String?
+  pageTokenEncrypted String?
+  lastSuccessfulAt   DateTime?
+  highWaterAt        DateTime?
+  initializedAt      DateTime?
+  updatedAt          DateTime @updatedAt
+  mailbox            Mailbox  @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
 }
 
 model ReplyTemplate {

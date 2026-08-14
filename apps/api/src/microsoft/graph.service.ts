@@ -8,18 +8,20 @@ import { PrismaService } from "../core/prisma.js";
 import { CryptoService } from "../core/crypto.js";
 import { AppError } from "../core/http.js";
 import { AlertService } from "../observability/alert.service.js";
+import { ProviderApiError } from "../providers/provider-api.error.js";
 
 export const GRAPH_SCOPES = ["User.Read", "Mail.ReadWrite", "Mail.Send"];
 
-export class GraphError extends Error {
+export class GraphError extends ProviderApiError {
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
-    readonly retryAfterSeconds?: number,
-    readonly responseBody?: unknown,
+    retryAfterSeconds?: number,
+    responseBody?: unknown,
   ) {
-    super(message);
+    super("MICROSOFT", status, code, message, retryAfterSeconds, responseBody);
+    this.name = "GraphError";
   }
 }
 
@@ -42,6 +44,12 @@ export class GraphService {
         409,
       );
     }
+    if (mailbox.provider && mailbox.provider !== "MICROSOFT")
+      throw new AppError(
+        "MAILBOX_PROVIDER_MISMATCH",
+        "该邮箱不是 Microsoft 邮箱",
+        409,
+      );
     const app = await this.prisma.microsoftAppConfig.findUnique({
       where: { id: "singleton" },
     });

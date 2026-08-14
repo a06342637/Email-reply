@@ -12,9 +12,7 @@ describe("MicrosoftService", () => {
       },
       mailbox: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
       autoReplyTask: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
-      transactionalOutbox: {
-        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
-      },
+      $executeRaw: vi.fn().mockResolvedValue(1),
     };
     const prisma = {
       microsoftAppConfig: {
@@ -48,6 +46,6 @@ describe("MicrosoftService", () => {
     expect(tx.microsoftAppConfig.upsert).toHaveBeenCalledTimes(1);
     expect(tx.mailbox.updateMany).toHaveBeenCalledTimes(1);
     expect(tx.autoReplyTask.updateMany).toHaveBeenCalledTimes(1);
-    expect(tx.transactionalOutbox.deleteMany).toHaveBeenCalledTimes(1);
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
   });
 });

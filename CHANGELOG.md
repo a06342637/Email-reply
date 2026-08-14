@@ -1,5 +1,17 @@
 # 更新日志
 
+## v0.02 - 2026-08-15
+
+- 新增 Gmail 个人邮箱和 Google Workspace 用户邮箱支持。
+- 新增 Google OAuth 2.0 Authorization Code + PKCE、加密 Refresh Token、Gmail API 配置页和连接/重新授权流程。
+- 使用 Gmail History API 检测 INBOX 与 SPAM；支持首次基线、暂停恢复补处理、History ID 失效重扫、分页游标持久化和数据库去重。
+- 新增 Gmail RFC 5322 MIME 回复草稿、HTML/纯文本、内嵌图片、固定附件、threadId/In-Reply-To/References 会话关联和发送状态核验。
+- 抽象邮件提供商轮询与发信路由，使 Microsoft Graph 和 Gmail 共用规则、模板、队列、日志、防循环与防重复状态机。
+- 备份恢复新增 Google 应用配置、可迁移 Token Cache 和 Gmail History 游标，同时兼容 v0.01 备份。
+- 后台新增 Google/Gmail 设置标签、双提供商连接入口、提供商与同步状态展示，并统一邮件服务文案。
+- 修复 Gmail 分页令牌过期恢复、非授权类 403 调度、跨提供商事务去重和 Gmail 会话绑定失败的安全降级路径。
+- 增加 Gmail OAuth、权限完整性、Token 刷新、History/SPAM 映射、分页恢复窗口、MIME 附件、无盲重试发送和旧备份兼容测试；当前共 23 个测试文件、71 项后端测试。
+
 ## v0.01 - 2026-08-14
 
 - 首个公开版本。

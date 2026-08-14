@@ -9,30 +9,30 @@ import {
   Res,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
-import {
-  MicrosoftConfigDto,
-  OAuthStartDto,
-  PublicUrlDto,
-} from "./microsoft.dto.js";
-import { MicrosoftService } from "./microsoft.service.js";
 import { AuditService } from "../core/audit.js";
+import {
+  GoogleConfigDto,
+  GoogleOAuthStartDto,
+  GooglePublicUrlDto,
+} from "./google.dto.js";
+import { GoogleService } from "./google.service.js";
 
-@Controller("api/v1/microsoft")
-export class MicrosoftController {
+@Controller("api/v1/google")
+export class GoogleController {
   constructor(
-    private readonly microsoft: MicrosoftService,
+    private readonly google: GoogleService,
     private readonly audit: AuditService,
   ) {}
 
   @Get("config")
   getConfig() {
-    return this.microsoft.getConfig();
+    return this.google.getConfig();
   }
 
   @Patch("config")
-  async saveConfig(@Body() body: MicrosoftConfigDto, @Req() req: Request) {
-    const result = await this.microsoft.saveConfig(body);
-    await this.audit.write("MICROSOFT_CONFIG_UPDATED", req, undefined, {
+  async saveConfig(@Body() body: GoogleConfigDto, @Req() req: Request) {
+    const result = await this.google.saveConfig(body);
+    await this.audit.write("GOOGLE_CONFIG_UPDATED", req, undefined, {
       clientId: body.clientId,
       secretReplaced: Boolean(body.clientSecret),
     });
@@ -40,8 +40,8 @@ export class MicrosoftController {
   }
 
   @Patch("public-url")
-  async publicUrl(@Body() body: PublicUrlDto, @Req() req: Request) {
-    await this.microsoft.setPublicUrl(body.publicUrl);
+  async publicUrl(@Body() body: GooglePublicUrlDto, @Req() req: Request) {
+    await this.google.setPublicUrl(body.publicUrl);
     await this.audit.write("PUBLIC_URL_UPDATED", req, undefined, {
       publicUrl: body.publicUrl,
     });
@@ -49,9 +49,9 @@ export class MicrosoftController {
   }
 
   @Post("oauth/start")
-  async start(@Body() body: OAuthStartDto, @Req() req: Request) {
-    const result = await this.microsoft.startOAuth(body.redirectAfter);
-    await this.audit.write("MICROSOFT_OAUTH_STARTED", req);
+  async start(@Body() body: GoogleOAuthStartDto, @Req() req: Request) {
+    const result = await this.google.startOAuth(body.redirectAfter);
+    await this.audit.write("GOOGLE_OAUTH_STARTED", req);
     return result;
   }
 
@@ -64,38 +64,35 @@ export class MicrosoftController {
     @Req() req: Request,
     @Res() res: Response,
   ) {
-    const publicUrl = await this.microsoft.publicUrl();
+    const publicUrl = await this.google.publicUrl();
     const fallbackUrl = publicUrl || "/";
     if (error || !code || !state) {
       await this.audit
-        .write("MICROSOFT_OAUTH_FAILED", req, undefined, {
+        .write("GOOGLE_OAUTH_FAILED", req, undefined, {
           providerError: (error || "MISSING_CODE_OR_STATE").slice(0, 100),
         })
         .catch(() => undefined);
       const reason = encodeURIComponent(
-        (description || error || "Microsoft authorization failed").slice(
-          0,
-          300,
-        ),
+        (description || error || "Google authorization failed").slice(0, 300),
       );
       return res.redirect(
-        `${fallbackUrl.replace(/\/$/, "")}/mailboxes?oauth=error&provider=microsoft&reason=${reason}`,
+        `${fallbackUrl.replace(/\/$/, "")}/mailboxes?oauth=error&provider=google&reason=${reason}`,
       );
     }
     try {
-      const result = await this.microsoft.finishOAuth(code, state);
+      const result = await this.google.finishOAuth(code, state);
       await this.audit
-        .write("MICROSOFT_MAILBOX_CONNECTED", req, {
+        .write("GOOGLE_MAILBOX_CONNECTED", req, {
           type: "Mailbox",
           id: result.mailboxId,
         })
         .catch(() => undefined);
       return res.redirect(
-        `${publicUrl}${result.redirectTo}?oauth=success&provider=microsoft&mailbox=${encodeURIComponent(result.mailboxId)}`,
+        `${publicUrl}${result.redirectTo}?oauth=success&provider=google&mailbox=${encodeURIComponent(result.mailboxId)}`,
       );
     } catch (caught) {
       await this.audit
-        .write("MICROSOFT_OAUTH_FAILED", req, undefined, {
+        .write("GOOGLE_OAUTH_FAILED", req, undefined, {
           error:
             caught instanceof Error
               ? caught.name.slice(0, 100)
@@ -105,10 +102,10 @@ export class MicrosoftController {
       const reason = encodeURIComponent(
         caught instanceof Error
           ? caught.message.slice(0, 300)
-          : "Microsoft authorization failed",
+          : "Google authorization failed",
       );
       return res.redirect(
-        `${publicUrl}/mailboxes?oauth=error&provider=microsoft&reason=${reason}`,
+        `${publicUrl}/mailboxes?oauth=error&provider=google&reason=${reason}`,
       );
     }
   }

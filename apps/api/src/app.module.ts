@@ -3,7 +3,7 @@ import { ServeStaticModule } from "@nestjs/serve-static";
 import { join } from "node:path";
 import { CoreModule } from "./core/core.module.js";
 import { AuthModule } from "./auth/auth.module.js";
-import { MicrosoftModule } from "./microsoft/microsoft.module.js";
+import { MailProviderModule } from "./providers/mail-provider.module.js";
 import { MailboxModule } from "./mailboxes/mailbox.module.js";
 import { TemplateModule } from "./templates/template.module.js";
 import { ObservabilityModule } from "./observability/observability.module.js";
@@ -17,7 +17,7 @@ import { AppMonitorService } from "./observability/app-monitor.service.js";
   imports: [
     CoreModule,
     AuthModule,
-    MicrosoftModule,
+    MailProviderModule,
     MailboxModule,
     TemplateModule,
     ObservabilityModule,

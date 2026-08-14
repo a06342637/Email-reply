@@ -86,7 +86,7 @@ export function Shell() {
           </div>
           <div>
             <strong title={uiSettings.siteName}>{uiSettings.siteName}</strong>
-            <span>Microsoft 自动回复</span>
+            <span>邮箱自动回复</span>
           </div>
         </div>
         <nav>

@@ -1,26 +1,27 @@
-# MailPilot — Microsoft 邮箱自动回复系统
+# MailPilot — Microsoft 与 Gmail 邮箱自动回复系统
 
-当前版本：**v0.01**
+当前版本：**v0.02**
 
 [![CI](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml)
 
-MailPilot 是一套面向 Debian 12/13 的 Docker 化 Microsoft 邮箱自动回复系统。它通过 Microsoft Graph 检测 Outlook、Hotmail 和全球版 Microsoft 365 用户邮箱的新邮件，并根据模板和规则自动执行普通 Reply。
+MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。它通过 Microsoft Graph 或 Gmail API 检测 Outlook、Hotmail、全球版 Microsoft 365、Gmail 和 Google Workspace 邮箱的新邮件，并根据模板和规则自动执行普通 Reply。
 
-系统不使用 IMAP/SMTP，不保存邮箱密码。收件、发件和 OAuth 都通过 HTTPS 访问 Microsoft 服务，因此服务器无需开放 993、465 或 587 端口。
+系统不使用 IMAP/SMTP，不保存邮箱密码。收件、发件和 OAuth 都通过 HTTPS 访问 Microsoft 或 Google 官方 API，因此服务器无需开放 993、465 或 587 端口。
 
-> v0.01 已完成代码级、类型、构建、自动化测试和本地 UI 冒烟测试。正式投入使用前，仍应使用你自己的 Microsoft Client ID、Client Secret、测试邮箱和 Debian 服务器完成本文末尾的真实环境验收。
+> v0.02 已完成代码级、类型、构建、自动化测试和本地 UI 冒烟测试。正式投入使用前，仍应使用你自己的 Microsoft/Google Client ID、Client Secret、测试邮箱和 Debian 服务器完成本文末尾的真实环境验收。
 
 ## 目录
 
 - [主要功能](#主要功能)
-- [v0.01 支持范围](#v001-支持范围)
+- [v0.02 支持范围](#v002-支持范围)
 - [系统架构](#系统架构)
 - [网络与服务器要求](#网络与服务器要求)
 - [Debian 一键安装](#debian-一键安装)
 - [配置域名和 HTTPS](#配置域名和-https)
 - [注册 Microsoft Entra 应用](#注册-microsoft-entra-应用)
+- [注册 Google Cloud Gmail 应用](#注册-google-cloud-gmail-应用)
 - [首次登录](#首次登录)
-- [连接 Microsoft 邮箱](#连接-microsoft-邮箱)
+- [连接邮箱](#连接邮箱)
 - [创建回复模板](#创建回复模板)
 - [创建自动回复任务](#创建自动回复任务)
 - [规则匹配说明](#规则匹配说明)
@@ -39,17 +40,19 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化 Microsoft 邮箱自动回�
 
 ## 主要功能
 
-- 支持 1–10 个 Outlook/Hotmail 个人邮箱和全球版 Microsoft 365 用户邮箱。
-- 每个邮箱通过 Microsoft OAuth 2.0 Authorization Code + PKCE 授权一次。
-- 使用加密的 MSAL Token Cache 自动刷新授权，不保存邮箱登录密码。
-- 分别检测收件箱 inbox 和垃圾箱 junkemail。
+- 支持合计 1–10 个 Microsoft 与 Google 邮箱。
+- Microsoft 支持 Outlook/Hotmail 个人邮箱和全球版 Microsoft 365 用户邮箱。
+- Google 支持 Gmail 个人邮箱和 Google Workspace 用户邮箱。
+- 每个邮箱通过 OAuth 2.0 Authorization Code + PKCE 授权一次。
+- 使用加密的 MSAL Token Cache 或 Google Refresh Token 自动刷新授权，不保存邮箱登录密码。
+- Microsoft 分别检测 inbox 与 junkemail；Gmail 分别识别 INBOX 与 SPAM。
 - 检测周期最低可设置为 3 秒；这是尽力而为周期，不是硬实时承诺。
 - 每封合格新邮件最多回复一次；同一会话后续新邮件仍可分别回复。
 - 每个邮箱一个自动回复任务，任务支持多条优先级规则。
 - 支持发件人地址、发件人域名、主题和所在文件夹规则。
 - 支持富文本、HTML、Liquid 变量、条件语句、内嵌图片和固定附件。
 - 模板采用草稿、发布和版本修订模式。
-- 暂停期间不发送，恢复后从旧 Delta 游标补处理积压邮件。
+- 暂停期间不发送，恢复后从 Microsoft Delta Link 或 Gmail History ID 补处理积压邮件。
 - PostgreSQL 事务 Outbox、BullMQ、Redis 锁和发送限速防止丢任务或并发重复发送。
 - 通过草稿 ID、追踪头和已发送邮件核验处理发送超时，避免盲目重发。
 - 管理后台支持暗色、亮色和跟随系统三态主题。
@@ -58,12 +61,14 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化 Microsoft 邮箱自动回�
 - 支持 Argon2id + XChaCha20-Poly1305 加密备份与跨服务器恢复。
 - 提供 Debian 安装脚本、改密 CLI、健康检查和升级回滚脚本。
 
-## v0.01 支持范围
+## v0.02 支持范围
 
 支持：
 
 - Outlook.com、Hotmail.com、Live.com 等个人 Microsoft 邮箱。
 - 全球版 Microsoft 365 普通用户邮箱。
+- Gmail 个人邮箱。
+- Google Workspace 普通用户邮箱。
 - Debian 12 和 Debian 13。
 - 单实例部署，建议管理 1–10 个邮箱。
 
@@ -83,10 +88,12 @@ flowchart LR
     P --> A[app: 后台 UI + NestJS API]
     A --> PG[(PostgreSQL 16)]
     A --> R[(Redis 7)]
-    W[worker: Delta / 规则 / 发送 / 核验] --> PG
+    W[worker: Delta / History / 规则 / 发送 / 核验] --> PG
     W --> R
     A -->|OAuth / Graph HTTPS| M[Microsoft Graph]
     W -->|收件检测与回复 HTTPS| M
+    A -->|OAuth HTTPS| G[Google OAuth]
+    W -->|History / Gmail API HTTPS| GA[Gmail API]
 ```
 
 Docker Compose 包含：
@@ -114,7 +121,7 @@ PostgreSQL 和 Redis 不映射宿主机公网端口。app 默认只监听宿主�
 
 - 22：SSH，仅开放给可信 IP 更安全。
 - 80：申请证书和 HTTP 跳转。
-- 443：后台和 Microsoft OAuth 回调。
+- 443：后台、Microsoft OAuth 和 Google OAuth 回调。
 - 8080：默认只绑定 127.0.0.1，不要直接开放公网。
 
 出站要求：
@@ -123,6 +130,8 @@ PostgreSQL 和 Redis 不映射宿主机公网端口。app 默认只监听宿主�
 - 能访问 login.microsoftonline.com。
 - 能访问 graph.microsoft.com。
 - 能访问 Microsoft 登录和 CDN 相关域名。
+- 能访问 accounts.google.com 和 oauth2.googleapis.com。
+- 能访问 gmail.googleapis.com 和 openidconnect.googleapis.com。
 
 不需要开放：
 
@@ -160,7 +169,7 @@ sudo ./install.sh
 
 安装时会询问：
 
-- **HTTPS 公开地址**：例如 https://mail.example.com。可以暂时留空，但留空时不能连接 Microsoft。
+- **HTTPS 公开地址**：例如 https://mail.example.com。可以暂时留空，但留空时不能连接 Microsoft 或 Gmail。
 - **本机监听端口**：默认 8080。
 - **管理员用户名**：直接回车会随机生成。
 - **管理员密码**：直接回车会随机生成；手工输入至少 12 位。
@@ -193,7 +202,7 @@ curl -fsS http://127.0.0.1:8080/health/ready
 
 ## 配置域名和 HTTPS
 
-Microsoft OAuth 回调必须使用可从浏览器访问的 HTTPS 域名。生产环境不要直接通过 http://服务器IP:8080 使用后台。
+Microsoft 与 Google OAuth 回调都必须使用可从浏览器访问的 HTTPS 域名。生产环境不要直接通过 http://服务器IP:8080 使用后台。
 
 下面以 Nginx 和域名 mail.example.com 为例。
 
@@ -278,7 +287,7 @@ https://mail.example.com
 
 如果安装时没有填写公开地址，登录后台后进入：
 
-**系统设置 → Microsoft → HTTPS 公开地址**
+**系统设置 → Microsoft（或 Google / Gmail）→ HTTPS 公开地址**
 
 填写 https://mail.example.com 并保存。
 
@@ -391,6 +400,96 @@ MailPilot 使用的是 **Delegated permissions**，不是 Application permission
 
 修改 Client ID 会使已有邮箱进入需要重新授权状态。仅替换同一应用的 Client Secret 时，系统会先尝试静默刷新。
 
+## 注册 Google Cloud Gmail 应用
+
+只需要创建一套 Google OAuth Web 应用，之后可用它连接 Gmail 个人邮箱或 Google Workspace 用户邮箱。
+
+### 1. 创建或选择 Google Cloud 项目
+
+打开：
+
+- [Google Cloud Console](https://console.cloud.google.com/)
+
+创建一个新项目，或选择专门用于 MailPilot 的现有项目。建议不要与无关生产系统共用 OAuth 客户端。
+
+### 2. 启用 Gmail API
+
+进入：
+
+**APIs & Services → Library → Gmail API → Enable**
+
+如果 Gmail API 未启用，OAuth 可能成功，但读取 History、创建草稿或发送邮件会返回 `accessNotConfigured` 或 403。
+
+### 3. 配置 OAuth 同意屏幕
+
+进入：
+
+**Google Auth Platform → Branding / Audience / Data Access**
+
+按用途选择受众：
+
+- 仅 Google Workspace 组织内部使用：可选择 **Internal**。
+- Gmail 个人账户或组织外账户：选择 **External**。
+
+填写应用名称、支持邮箱和开发者联系邮箱。自用或测试阶段，把需要连接的 Gmail 地址加入 **Test users**。
+
+MailPilot 请求以下权限：
+
+| 权限                   | 用途                                                                                                                            |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| openid、email、profile | 识别授权账户和显示名称                                                                                                          |
+| `gmail.readonly`       | Google 会授予 Gmail 邮件只读权限；MailPilot 实际只请求检测所需的元数据、邮件头、INBOX/SPAM 标签和 History，不保存来信正文或附件 |
+| `gmail.compose`        | 创建带 HTML、纯文本、内嵌图片和附件的回复草稿，并发送草稿                                                                       |
+
+这些 Gmail 权限包含 Google 受限权限。若应用要公开给大量外部用户使用，Google 可能要求完成 OAuth 应用验证和安全评估；本项目无法替你完成 Google 的品牌、域名所有权或合规审核。
+
+> 重要：External 应用处于 **Testing** 状态时，包含 Gmail 受限权限的刷新令牌通常只有 7 天有效期。长期无人值守运行前，应按 Google 要求发布到 Production，或使用组织内部应用，并完成可能要求的验证。
+
+### 4. 创建 OAuth Web Client
+
+进入：
+
+**Google Auth Platform → Clients → Create Client → Web application**
+
+建议名称：
+
+```text
+MailPilot Auto Reply
+```
+
+在 **Authorized redirect URIs** 中填写：
+
+```text
+https://你的域名/api/v1/google/oauth/callback
+```
+
+例如：
+
+```text
+https://mail.example.com/api/v1/google/oauth/callback
+```
+
+必须满足：
+
+- 使用 HTTPS。
+- 域名与 MailPilot 的公开地址完全一致。
+- 路径必须是 `/api/v1/google/oauth/callback`。
+- 不要增加结尾斜杠、额外路径或查询参数。
+
+### 5. 填入 MailPilot
+
+登录后台，进入：
+
+**系统设置 → Google / Gmail**
+
+填写：
+
+- OAuth Client ID，通常以 `.apps.googleusercontent.com` 结尾。
+- Client Secret。
+- HTTPS 公开地址。
+
+保存后 Client Secret 不再显示原文，只能替换。修改 Client ID 会暂停现有 Gmail 任务并要求重新授权；只替换同一客户端的 Secret 时，系统会先尝试刷新已有邮箱。
+
 ## 首次登录
 
 打开：
@@ -416,9 +515,11 @@ docker compose logs app
 
 忘记用户名或密码请使用本文的 CLI 改密命令，不要修改数据库。
 
-## 连接 Microsoft 邮箱
+## 连接邮箱
 
-确保已配置 HTTPS 公开地址、Client ID 和 Client Secret。
+确保已配置 HTTPS 公开地址，以及对应提供商的 Client ID 和 Client Secret。
+
+### 连接 Microsoft 邮箱
 
 进入：
 
@@ -434,14 +535,36 @@ docker compose logs app
 
 每个邮箱都需要单独执行一次授权。
 
+同一个邮箱地址只能绑定一个提供商，避免混合授权缓存、会话游标和历史去重记录。若组织正在做 Microsoft/Google 混合迁移，请先确定该地址当前实际承载邮件的平台。
+
+### 连接 Gmail 邮箱
+
+进入：
+
+**邮箱账号 → 连接 Gmail**
+
+随后：
+
+1. 跳转到 Google 授权页面。
+2. 选择要连接的 Gmail 或 Google Workspace 账户。
+3. 同意 MailPilot 显示的 Gmail 权限。
+4. Google 回调到 MailPilot。
+5. 邮箱状态显示为“已连接”。
+
+若 Google 显示“此应用未经验证”：
+
+- 确认自己正在使用专属的 Google Cloud 项目。
+- 测试阶段确认当前邮箱已加入 Test users。
+- 生产公开使用前按 Google 要求完成应用发布和验证。
+- 不要在不信任的第三方 Client ID 上继续授权。
+
 邮箱页面会显示：
 
 - 邮箱地址和显示名称。
 - 账户类型。
-- 租户 ID。
+- 邮件提供商；Microsoft 邮箱还会显示租户 ID。
 - Token 最后刷新时间。
-- 收件箱 Delta 游标状态。
-- 垃圾箱 Delta 游标状态。
+- Microsoft 收件箱/垃圾箱 Delta 游标，或 Gmail History 游标状态。
 
 如果出现“需要授权”：
 
@@ -449,7 +572,10 @@ docker compose logs app
 - 检查企业租户是否要求管理员同意。
 - 点击重新连接并完成授权。
 
-移除邮箱只删除本地 Token Cache、游标和邮箱配置。若要彻底撤销权限，还应在 Microsoft 账户隐私页面或 Entra Enterprise applications 中撤销该应用许可。
+移除邮箱只删除本地 Token Cache、Refresh Token、游标和邮箱配置。若要彻底撤销权限：
+
+- Microsoft：在 Microsoft 账户隐私页面或 Entra Enterprise applications 中撤销应用许可。
+- Google：在 [Google 账户第三方连接](https://myaccount.google.com/connections) 中移除 MailPilot 对应应用。
 
 ## 创建回复模板
 
@@ -514,8 +640,9 @@ docker compose logs app
 - 默认总量上限 10 MB。
 - 可在系统设置中调整。
 - 系统硬上限 25 MB。
-- 小附件直接上传。
-- 大附件通过 Microsoft Graph Upload Session 分块上传。
+- Microsoft 小附件直接上传，大附件通过 Graph Upload Session 分块上传。
+- Gmail 会把 HTML、纯文本、内嵌图片和附件封装为一封 RFC 5322 MIME 草稿后一次上传。
+- 接近 25 MB 上限时还会产生 Base64/MIME 开销；若 Gmail 拒绝过大的邮件，请降低系统附件上限。
 
 ### 模板版本
 
@@ -550,14 +677,14 @@ docker compose logs app
 保存后任务处于草稿状态。点击“启动”后：
 
 1. 系统记录启用时间。
-2. 为 inbox 和 junkemail 建立 Delta 基线。
+2. Microsoft 为 inbox/junkemail 建立 Delta 基线；Gmail 建立 History ID 基线并扫描启用后的极短窗口。
 3. 启用前的历史邮件不会回复。
 4. 后续合格邮件进入持久队列。
 
 3 秒表示调度下限和尽力而为周期。实际延迟还受以下因素影响：
 
-- Microsoft Graph 网络延迟。
-- Graph 429 限流和 Retry-After。
+- Microsoft Graph 或 Gmail API 网络延迟。
+- 提供商 429/配额限流和 Retry-After。
 - 当前邮箱积压。
 - 附件上传时间。
 - Worker 资源和服务器负载。
@@ -609,7 +736,7 @@ docker compose logs app
 ### 暂停
 
 - 停止新的检测和发送。
-- 保留 inbox 和 junkemail 的 Delta 游标。
+- 保留 Microsoft Delta 游标或 Gmail History ID。
 - 不删除积压记录。
 
 ### 恢复
@@ -622,7 +749,7 @@ docker compose logs app
 ### 删除任务
 
 - 停止调度和发送。
-- 删除任务规则和 Delta 游标。
+- 删除任务规则、Microsoft Delta 游标或 Gmail History 游标。
 - 保留正常保留期内的日志、审计和去重记录。
 - 以后重新创建任务时建立全新基线。
 - 不补回复旧任务删除期间的邮件。
@@ -675,7 +802,7 @@ docker compose logs app
 - 实际收件地址优先使用有效 Reply-To，没有时才使用 From。
 - Microsoft 官方邮件不能通过伪造外部 Reply-To 绕过服务域名过滤。
 - 不使用 Reply All。
-- 保持 Microsoft 会话关系。
+- Microsoft 保持 Graph conversation；Gmail 使用 threadId、In-Reply-To 和 References 保持会话关系。
 - 默认不附带原邮件正文。
 - 添加 Auto-Submitted、X-Auto-Response-Suppress 和实例追踪头。
 
@@ -685,7 +812,7 @@ docker compose logs app
 - 确认未发送：状态变为 FAILED_CONFIRMED，可手工重试。
 - 无法确认：状态变为 UNCERTAIN，并产生告警。
 
-UNCERTAIN 记录禁止直接强制重发，应先人工检查 Microsoft 已发送邮件。
+UNCERTAIN 记录禁止直接强制重发，应先人工检查对应邮箱的草稿和已发送邮件。
 
 ## 日志、告警和 Webhook
 
@@ -737,7 +864,7 @@ UNCERTAIN 记录禁止直接强制重发，应先人工检查 Microsoft 已发�
 告警类型包括：
 
 - 邮箱需要重新授权。
-- Microsoft Graph 持续限流。
+- Microsoft Graph 或 Gmail API 持续限流。
 - 自动回复任务熔断。
 - Worker 心跳丢失。
 - 磁盘空间不足。
@@ -782,7 +909,7 @@ GET https://你的域名/health/ready
 
 ## 管理员安全与 TOTP
 
-v0.01 只有一个本地超级管理员，不开放注册。
+当前版本只有一个本地超级管理员，不开放注册。
 
 已实现：
 
@@ -834,8 +961,8 @@ docker compose exec app autoreply admin reset-password --disable-totp
 
 备份包含：
 
-- Microsoft 应用配置。
-- 可迁移的 Microsoft Token Cache。
+- Microsoft 与 Google OAuth 应用配置。
+- 可迁移的 Microsoft MSAL Token Cache 与 Google OAuth Token Cache。
 - 邮箱、任务、游标和规则。
 - 模板、模板版本和附件。
 - 系统设置和 Webhook。
@@ -871,9 +998,9 @@ docker compose exec app autoreply admin reset-password --disable-totp
 恢复后请先检查：
 
 - 公开域名。
-- Microsoft Client ID 和 Secret。
+- Microsoft 与 Google Client ID/Secret。
 - 邮箱授权状态。
-- Delta 游标。
+- Microsoft Delta 游标与 Gmail History 游标。
 - 积压数量。
 - 模板和规则。
 
@@ -986,14 +1113,20 @@ cat VERSION
 
 检查以下三处必须完全一致：
 
-- Entra 应用中的 Web Redirect URI。
+- Entra 或 Google Cloud OAuth Client 中的 Web Redirect URI。
 - MailPilot 系统设置中的 HTTPS 公开地址。
 - 浏览器实际访问域名。
 
-正确格式：
+Microsoft 正确格式：
 
 ```text
 https://mail.example.com/api/v1/microsoft/oauth/callback
+```
+
+Google 正确格式：
+
+```text
+https://mail.example.com/api/v1/google/oauth/callback
 ```
 
 ### 2. 企业邮箱提示需要管理员批准
@@ -1015,7 +1148,7 @@ https://mail.example.com/api/v1/microsoft/oauth/callback
 
 ### 4. Client Secret 无效
 
-确认填写的是 Secret 的 **Value**，不是 Secret ID。
+Microsoft 确认填写的是 Secret 的 **Value**，不是 Secret ID；Google 确认 Client ID 与 Client Secret 来自同一个 Web OAuth Client。
 
 Secret 过期后：
 
@@ -1033,7 +1166,7 @@ Secret 过期后：
 - 默认模板是否已发布。
 - 邮件是否被安全过滤。
 - 是否命中自定义排除名单。
-- 是否遇到 Graph 429。
+- 是否遇到 Microsoft Graph 或 Gmail API 限流。
 - 是否有积压限速。
 - Worker 是否健康。
 
@@ -1051,14 +1184,14 @@ docker compose exec app autoreply doctor
 
 确认：
 
-- 邮箱页面 junkemail 游标已初始化。
+- Microsoft 邮箱页面 junkemail 游标已初始化，或 Gmail 页面 History 游标已初始化。
 - 任务已经运行至少一个检测周期。
 - 邮件 receivedDateTime 不早于任务启用时间。
 - 邮件不是后来移入垃圾箱的启用前历史邮件。
 
-### 7. 出现 Microsoft Graph 429
+### 7. 出现 Microsoft Graph 或 Gmail API 429
 
-这是 Microsoft 限流。系统会遵守 Retry-After 并退避，不应通过无限增加 Worker 绕过限制。
+这是邮件提供商限流或 Google 配额限制。系统会遵守 Retry-After 并退避，不应通过无限增加 Worker 绕过限制。
 
 可适当：
 
@@ -1066,9 +1199,20 @@ docker compose exec app autoreply doctor
 - 降低每邮箱积压发送速率。
 - 避免同时恢复大量邮箱任务。
 
-### 8. 状态为 UNCERTAIN
+### 8. Gmail 每隔 7 天要求重新授权
 
-系统无法确认 Graph 是否已经接受发送。请先登录对应 Microsoft 邮箱检查：
+最常见原因是 Google OAuth 应用仍处于 **Testing** 状态。对于 External 应用和 Gmail 受限权限，测试用户刷新令牌通常在 7 天后失效。
+
+处理方法：
+
+- 在 Google Auth Platform 检查 Publishing status。
+- 仅组织内部使用时考虑 Internal 应用。
+- 外部长期使用时按 Google 要求发布到 Production，并完成可能要求的验证。
+- 完成设置后在 MailPilot 点击 Gmail“重新授权”。
+
+### 9. 状态为 UNCERTAIN
+
+系统无法确认提供商是否已经接受发送。请先登录对应 Microsoft 或 Gmail 邮箱检查：
 
 - 草稿箱。
 - 已发送邮件。
@@ -1076,13 +1220,13 @@ docker compose exec app autoreply doctor
 
 不要直接强制重发，否则可能造成重复回复。
 
-### 9. 忘记后台密码
+### 10. 忘记后台密码
 
 ```bash
 docker compose exec app autoreply admin reset-password --random
 ```
 
-### 10. health/live 正常但 health/ready 失败
+### 11. health/live 正常但 health/ready 失败
 
 health/live 只表示 app 进程存活。health/ready 还会检查 PostgreSQL、Redis 和 Worker 心跳。
 
@@ -1091,7 +1235,7 @@ docker compose ps
 docker compose logs --tail=200 postgres redis app worker
 ```
 
-### 11. 8080 端口被占用
+### 12. 8080 端口被占用
 
 修改 .env 中 HOST_PORT，例如：
 
@@ -1107,7 +1251,7 @@ docker compose up -d
 
 同时修改 Nginx proxy_pass 指向新的本地端口。
 
-### 12. 备份口令忘记
+### 13. 备份口令忘记
 
 无法恢复。备份加密没有后门。请妥善保管口令，并与备份文件分开保存。
 
@@ -1124,7 +1268,7 @@ docker compose up -d
 - 定期导出加密备份，并实际演练恢复。
 - 限制 SSH 来源 IP，优先使用密钥登录。
 - 定期安装 Debian 和 Docker 安全更新。
-- 如怀疑实例主密钥泄漏，应撤销 Microsoft 应用许可、轮换 Client Secret 和 Webhook Secret，并在干净服务器重建实例。
+- 如怀疑实例主密钥泄漏，应撤销 Microsoft/Google 应用许可、轮换 Client Secret 和 Webhook Secret，并在干净服务器重建实例。
 
 更多说明见：
 
@@ -1180,10 +1324,13 @@ http://127.0.0.1:4174
 
 仓库内置 GitHub Actions，会在 Linux/Node.js 22 上重复静态检查，并构建、启动完整 Docker Compose 栈，验证迁移、关键数据库索引、PostgreSQL、Redis、app、worker、健康接口、维护任务和运维 CLI。
 
-当前包含 18 个后端测试文件、53 项自动化测试，覆盖：
+当前包含 23 个后端测试文件、71 项自动化测试，覆盖：
 
 - Graph Token 临时故障和授权失效区分。
 - 更换 Microsoft Client ID 时配置、停用与队列清理的事务一致性。
+- Google PKCE OAuth、Refresh Token 刷新、撤销授权和提供商绑定状态。
+- Gmail History 基线、SPAM 映射、MIME 草稿、附件与无盲重试发送。
+- v0.01 备份向后兼容和 Gmail 游标关联完整性。
 - MIME 循环抑制、追踪头和非 ASCII Subject 编码。
 - 已发送邮件跨页追踪查询。
 - PostgreSQL Outbox 防丢恢复。
@@ -1212,6 +1359,7 @@ http://127.0.0.1:4174
 
 - auth：登录、注销、改密、TOTP 和主题。
 - microsoft：Client 配置和 OAuth。
+- google：Google Cloud Client 配置和 Gmail OAuth。
 - mailboxes：邮箱连接状态和移除。
 - tasks：任务、暂停、恢复和规则。
 - templates：模板、发布、附件和测试发送。
@@ -1254,13 +1402,22 @@ API 使用统一请求 ID、错误码和脱敏错误结构。
 - Secret 轮换。
 - 撤销授权后重新连接。
 
+### Google OAuth 与 Gmail
+
+- Gmail 个人邮箱。
+- Google Workspace 邮箱。
+- External 测试用户与 7 天刷新令牌限制。
+- OAuth 应用 Production 状态或 Internal 组织应用。
+- Token 静默刷新、撤销授权和重新连接。
+- Gmail API 未启用、受限权限未批准和配额限制。
+
 ### 收件检测
 
 - 收件箱新邮件。
 - 垃圾箱新邮件。
-- Delta 多页结果。
+- Microsoft Delta 与 Gmail History 多页结果。
 - 服务停止一段时间后补处理。
-- Delta Token 失效恢复。
+- Microsoft Delta Token 与 Gmail History ID 失效恢复。
 - 邮件在文件夹之间移动。
 - 启用前历史邮件不回复。
 
@@ -1287,7 +1444,7 @@ API 使用统一请求 ID、错误码和脱敏错误结构。
 - 15 秒、60 秒和 5 分钟核验。
 - Redis 队列清空后从 PostgreSQL 重建。
 - Worker 重启。
-- Graph 401、403、429、5xx 和网络中断。
+- Graph/Gmail API 401、403、429、5xx 和网络中断。
 - 确认可验证场景不产生二次回复。
 
 ### 备份和升级
@@ -1300,7 +1457,7 @@ API 使用统一请求 ID、错误码和脱敏错误结构。
 - 升级失败镜像回滚。
 - 数据库不兼容时使用升级前备份恢复。
 
-在未完成上述真实 Graph 和 Debian 测试前，不应把测试邮箱以外的关键业务邮箱直接切换为无人值守运行。
+在未完成上述真实 Microsoft Graph、Gmail API 和 Debian 测试前，不应把测试邮箱以外的关键业务邮箱直接切换为无人值守运行。
 
 ## 版本规则
 

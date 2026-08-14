@@ -22,7 +22,7 @@ let smokeSettings = {
   dedupeDays: 365,
   sessionIdleMinutes: 120,
   sessionAbsoluteMinutes: 720,
-  version: "0.01",
+  version: "0.02",
 };
 
 const template = {
@@ -68,6 +68,7 @@ const template = {
 const mailbox = {
   id: "mailbox-1",
   email: "service@example.com",
+  provider: "MICROSOFT",
   displayName: "客户服务",
   tenantId: "tenant-1",
   accountType: "MICROSOFT_365",
@@ -112,6 +113,23 @@ const mailbox = {
       },
     ],
   },
+};
+
+const gmailMailbox = {
+  id: "mailbox-google-1",
+  email: "support.demo@gmail.com",
+  provider: "GOOGLE",
+  displayName: "Gmail 支持邮箱",
+  accountType: "GMAIL_PERSONAL",
+  status: "CONNECTED",
+  lastTokenRefreshAt: now,
+  cursors: [],
+  gmailCursor: {
+    lastSuccessfulAt: now,
+    initializedAt: now,
+    highWaterAt: now,
+  },
+  task: null,
 };
 
 const server = createServer(async (req, res) => {
@@ -159,7 +177,7 @@ function api(path, method, body, res) {
   }
   if (path === "/api/v1/dashboard")
     return json(res, {
-      mailboxes: [{ status: "CONNECTED", _count: { _all: 1 } }],
+      mailboxes: [{ status: "CONNECTED", _count: { _all: 2 } }],
       tasks: [{ status: "RUNNING", _count: { _all: 1 } }],
       states24h: [{ state: "SENT", _count: { _all: 18 } }],
       states7d: [{ state: "SENT", _count: { _all: 72 } }],
@@ -182,7 +200,10 @@ function api(path, method, body, res) {
     });
   if (path === "/api/v1/mailboxes") {
     if (mailboxRemoved) return json(res, []);
-    return json(res, [{ ...mailbox, task: taskDeleted ? null : mailbox.task }]);
+    return json(res, [
+      { ...mailbox, task: taskDeleted ? null : mailbox.task },
+      gmailMailbox,
+    ]);
   }
   if (path === "/api/v1/mailboxes/mailbox-1" && method === "DELETE") {
     mailboxRemoved = true;
@@ -234,9 +255,24 @@ function api(path, method, body, res) {
         "Mail.Send",
       ],
     });
+  if (path === "/api/v1/google/config")
+    return json(res, {
+      configured: true,
+      clientId: "123456789-example.apps.googleusercontent.com",
+      hasClientSecret: true,
+      publicUrl: "https://mail.example.com",
+      callbackUrl: "https://mail.example.com/api/v1/google/oauth/callback",
+      scopes: [
+        "openid",
+        "email",
+        "profile",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.compose",
+      ],
+    });
   if (path === "/api/v1/system/info")
     return json(res, {
-      version: "0.01",
+      version: "0.02",
       node: process.version,
       database: true,
       redis: true,

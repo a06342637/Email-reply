@@ -248,7 +248,7 @@ export class AuthService {
     });
     return {
       secret,
-      uri: authenticator.keyuri(username, "Microsoft Mail AutoReply", secret),
+      uri: authenticator.keyuri(username, "MailPilot AutoReply", secret),
     };
   }
 

@@ -26,6 +26,7 @@ export function SettingsPage() {
   const { admin, applyUiSettings, refreshMe, notify } = useApp();
   const [data, setData] = useState<any>();
   const [ms, setMs] = useState<any>();
+  const [google, setGoogle] = useState<any>();
   const [info, setInfo] = useState<any>();
   const [tab, setTab] = useState("general");
   const [totp, setTotp] = useState<any>();
@@ -33,21 +34,23 @@ export function SettingsPage() {
   const [totpPassword, setTotpPassword] = useState("");
   const [webhooks, setWebhooks] = useState<any[]>([]);
   async function load() {
-    const [s, m, i, w] = await Promise.all([
+    const [s, m, g, i, w] = await Promise.all([
       api("/api/v1/settings"),
       api("/api/v1/microsoft/config"),
+      api("/api/v1/google/config"),
       api("/api/v1/system/info"),
       api<any[]>("/api/v1/webhooks"),
     ]);
     setData(s);
     setMs(m);
+    setGoogle(g);
     setInfo(i);
     setWebhooks(w);
   }
   useEffect(() => {
     void load();
   }, []);
-  if (!data || !ms || !info) return <Loading />;
+  if (!data || !ms || !google || !info) return <Loading />;
   async function saveSettings() {
     const saved = await api<any>(
       "/api/v1/settings",
@@ -87,6 +90,21 @@ export function SettingsPage() {
     notify("Microsoft 配置已保存");
     await load();
   }
+  async function saveGoogle() {
+    await api(
+      "/api/v1/google/config",
+      json("PATCH", {
+        clientId: google.clientId,
+        clientSecret: google.clientSecret || undefined,
+      }),
+    );
+    await api(
+      "/api/v1/google/public-url",
+      json("PATCH", { publicUrl: google.publicUrl || "" }),
+    );
+    notify("Google / Gmail 配置已保存");
+    await load();
+  }
   async function turnOffTotp() {
     await api(
       "/api/v1/auth/totp/disable",
@@ -101,12 +119,13 @@ export function SettingsPage() {
     <>
       <PageHeader
         title="系统设置"
-        description="站点、Microsoft 应用、登录安全、保留周期、备份和健康状态。"
+        description="站点、邮件提供商、登录安全、保留周期、备份和健康状态。"
       />
       <div className="settings-tabs">
         {[
           ["general", "常规"],
           ["microsoft", "Microsoft"],
+          ["google", "Google / Gmail"],
           ["security", "登录安全"],
           ["backup", "备份恢复"],
           ["system", "系统状态"],
@@ -312,6 +331,73 @@ export function SettingsPage() {
             <button className="primary" onClick={saveMs}>
               <CloudCog />
               保存 Microsoft 配置
+            </button>
+          </div>
+        </Card>
+      )}
+      {tab === "google" && (
+        <Card>
+          <div className="settings-section">
+            <h2>Google Cloud / Gmail API 应用</h2>
+            <Notice>
+              请在 Google Cloud 启用 Gmail API，并创建“Web 应用”OAuth
+              客户端。若应用仍处于“测试中”，外部用户的刷新令牌通常会在 7
+              天后失效；Client Secret 保存后不再回显。
+            </Notice>
+            <div className="form-grid">
+              <label>
+                Client ID
+                <input
+                  value={google.clientId}
+                  onChange={(e) =>
+                    setGoogle({ ...google, clientId: e.target.value })
+                  }
+                  placeholder="xxxxxxxx.apps.googleusercontent.com"
+                />
+              </label>
+              <label>
+                Client Secret
+                <input
+                  type="password"
+                  value={google.clientSecret || ""}
+                  onChange={(e) =>
+                    setGoogle({ ...google, clientSecret: e.target.value })
+                  }
+                  placeholder={
+                    google.hasClientSecret
+                      ? "已保存；留空不替换"
+                      : "请输入 Client Secret"
+                  }
+                />
+              </label>
+              <label>
+                HTTPS 公开地址
+                <input
+                  value={google.publicUrl || ""}
+                  onChange={(e) =>
+                    setGoogle({ ...google, publicUrl: e.target.value })
+                  }
+                  placeholder="https://mail.example.com"
+                />
+              </label>
+            </div>
+            <div className="callback">
+              <span>OAuth 回调地址</span>
+              <code>{google.callbackUrl}</code>
+            </div>
+            <div className="scope-list">
+              {google.scopes.map((scope: string) => (
+                <span key={scope}>{scope}</span>
+              ))}
+            </div>
+            <Notice>
+              Gmail 权限包含 Google 受限权限。公开提供给大量外部用户前，Google
+              可能要求完成 OAuth
+              应用验证和安全评估；自用或测试阶段请把邮箱加入“测试用户”。
+            </Notice>
+            <button className="primary" onClick={saveGoogle}>
+              <CloudCog />
+              保存 Google 配置
             </button>
           </div>
         </Card>

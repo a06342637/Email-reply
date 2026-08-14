@@ -4,9 +4,9 @@ import type { TemplateVariables } from "@autoreply/shared";
 import { PrismaService } from "../core/prisma.js";
 import { AppConfig } from "../core/config.js";
 import { TemplateService } from "../templates/template.service.js";
-import { MailTransportService } from "../microsoft/mail-transport.service.js";
+import { MailProviderService } from "../providers/mail-provider.service.js";
 import { AlertService } from "../observability/alert.service.js";
-import { GraphError } from "../microsoft/graph.service.js";
+import { ProviderApiError } from "../providers/provider-api.error.js";
 import { RestoreBarrierService } from "../backup/restore-barrier.service.js";
 import { AppError } from "../core/http.js";
 
@@ -18,7 +18,7 @@ export class MailProcessorService {
     private readonly prisma: PrismaService,
     private readonly config: AppConfig,
     private readonly templates: TemplateService,
-    private readonly transport: MailTransportService,
+    private readonly transport: MailProviderService,
     private readonly alerts: AlertService,
     private readonly restoreBarrier: RestoreBarrierService,
   ) {}
@@ -111,11 +111,14 @@ export class MailProcessorService {
       const draft = await this.transport.createReplyDraft({
         mailboxId: receipt.mailboxId,
         sourceMessageId: receipt.graphMessageId,
+        sourceInternetMessageId: receipt.internetMessageId,
+        conversationId: receipt.conversationId,
         mailboxEmail: receipt.mailbox.email,
         recipient: receipt.replyToEmail || receipt.senderEmail,
         subject: rendered.subject,
         html: rendered.html,
         text: rendered.text,
+        assets: rendered.assets,
         trackingId: receipt.trackingId,
         instanceId: await this.instanceId(),
       });
@@ -636,7 +639,7 @@ export class MailProcessorService {
       severity: "CRITICAL",
       title: "回复发送状态无法确认",
       message:
-        "系统无法安全确认此邮件是否已发送，因此不会自动重发，请人工核查 Microsoft 已发送邮件。",
+        "系统无法安全确认此邮件是否已发送，因此不会自动重发，请人工核查对应邮箱的已发送邮件。",
       metadata: { receiptId, mailboxId: receipt.mailboxId },
     });
   }
@@ -735,7 +738,7 @@ export class MailProcessorService {
 
   private isUncertainTransportError(error: unknown): boolean {
     return (
-      error instanceof GraphError &&
+      error instanceof ProviderApiError &&
       (error.status === 0 || error.status >= 500 || error.status === 429)
     );
   }
@@ -743,10 +746,12 @@ export class MailProcessorService {
   private isAuthorizationError(error: unknown): boolean {
     return (
       (error instanceof AppError && error.code === "MAILBOX_AUTH_REQUIRED") ||
-      (error instanceof GraphError &&
+      (error instanceof ProviderApiError &&
         (error.status === 401 ||
           (error.status === 403 &&
-            /InvalidAuthenticationToken|ErrorAccessDenied/i.test(error.code))))
+            /InvalidAuthenticationToken|ErrorAccessDenied|authError|insufficientPermissions|invalidCredentials|unauthorized/i.test(
+              error.code,
+            ))))
     );
   }
 
@@ -756,7 +761,7 @@ export class MailProcessorService {
         error.status >= 400 &&
         error.status < 500 &&
         ![408, 429].includes(error.status)) ||
-      (error instanceof GraphError &&
+      (error instanceof ProviderApiError &&
         error.status >= 400 &&
         error.status < 500 &&
         ![408, 409, 429].includes(error.status))
@@ -764,7 +769,7 @@ export class MailProcessorService {
   }
 
   private errorCode(error: unknown): string {
-    return error instanceof GraphError
+    return error instanceof ProviderApiError
       ? error.code
       : error instanceof Error
         ? error.name

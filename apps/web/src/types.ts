@@ -36,6 +36,7 @@ export type Rule = {
 export type Mailbox = {
   id: string;
   email: string;
+  provider: "MICROSOFT" | "GOOGLE";
   displayName: string;
   tenantId?: string;
   accountType?: string;
@@ -48,6 +49,11 @@ export type Mailbox = {
     lastSuccessfulAt?: string;
     initializedAt?: string;
   }>;
+  gmailCursor?: {
+    lastSuccessfulAt?: string;
+    initializedAt?: string;
+    highWaterAt?: string;
+  };
 };
 export type Template = {
   id: string;

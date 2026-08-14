@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaService } from "../core/prisma.js";
 import { AppError } from "../core/http.js";
 import { TemplateService } from "./template.service.js";
-import { MailTransportService } from "../microsoft/mail-transport.service.js";
+import { MailProviderService } from "../providers/mail-provider.service.js";
 import type { TemplateVariables } from "@autoreply/shared";
 import { AppConfig } from "../core/config.js";
 
@@ -12,7 +12,7 @@ export class TestMailService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly templates: TemplateService,
-    private readonly transport: MailTransportService,
+    private readonly transport: MailProviderService,
     private readonly config: AppConfig,
   ) {}
 
@@ -69,9 +69,12 @@ export class TestMailService {
     const instanceId = await this.instanceId();
     const draft = await this.transport.createTestDraft({
       mailboxId,
+      mailboxEmail: mailbox.email,
       recipient,
       subject: rendered.subject,
       html: rendered.html,
+      text: rendered.text,
+      assets: rendered.assets,
       trackingId,
       instanceId,
     });

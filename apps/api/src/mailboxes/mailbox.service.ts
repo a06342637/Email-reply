@@ -18,6 +18,7 @@ export class MailboxService {
       select: {
         id: true,
         email: true,
+        provider: true,
         displayName: true,
         tenantId: true,
         accountType: true,
@@ -61,6 +62,13 @@ export class MailboxService {
         cursors: {
           select: {
             folder: true,
+            lastSuccessfulAt: true,
+            initializedAt: true,
+            highWaterAt: true,
+          },
+        },
+        gmailCursor: {
+          select: {
             lastSuccessfulAt: true,
             initializedAt: true,
             highWaterAt: true,
@@ -115,11 +123,7 @@ export class MailboxService {
         409,
       );
     if (!mailbox.tokenCacheEncrypted)
-      throw new AppError(
-        "MAILBOX_AUTH_REQUIRED",
-        "请重新连接 Microsoft 邮箱",
-        409,
-      );
+      throw new AppError("MAILBOX_AUTH_REQUIRED", "请重新连接邮箱提供商", 409);
     await this.prisma.mailbox.update({
       where: { id },
       data: { status: "CONNECTED" },
@@ -136,6 +140,7 @@ export class MailboxService {
         data: { status: "DELETED", deletedAt: new Date(), nextPollAt: null },
       }),
       this.prisma.folderCursor.deleteMany({ where: { mailboxId: id } }),
+      this.prisma.gmailCursor.deleteMany({ where: { mailboxId: id } }),
       this.prisma.replyRule.deleteMany({ where: { task: { mailboxId: id } } }),
       this.prisma.$executeRaw`
         DELETE FROM "TransactionalOutbox" AS outbox
@@ -171,7 +176,7 @@ export class MailboxService {
           homeAccountId: `removed:${id}`,
           tokenCacheEncrypted: await this.crypto.encryptString(
             "{}",
-            `msal:${id}`,
+            mailbox.provider === "GOOGLE" ? `google-token:${id}` : `msal:${id}`,
           ),
           lastErrorCode: null,
           lastErrorMessage: null,
@@ -216,6 +221,7 @@ export class MailboxService {
       throw new AppError("TASK_EXISTS", "该邮箱已经有自动回复任务", 409);
     if (existing) {
       await this.prisma.folderCursor.deleteMany({ where: { mailboxId } });
+      await this.prisma.gmailCursor.deleteMany({ where: { mailboxId } });
       return this.prisma.autoReplyTask.update({
         where: { id: existing.id },
         data: {
@@ -282,10 +288,10 @@ export class MailboxService {
         "请选择已发布的默认模板",
         409,
       );
-    const hasCursors =
-      (await this.prisma.folderCursor.count({
-        where: { mailboxId: task.mailboxId, initializedAt: { not: null } },
-      })) === 2;
+    const hasCursors = await this.hasInitializedCursor(
+      task.mailboxId,
+      task.mailbox.provider,
+    );
     const now = new Date();
     const result = await this.prisma.autoReplyTask.update({
       where: { id },
@@ -339,10 +345,10 @@ export class MailboxService {
         "请选择已发布的默认模板",
         409,
       );
-    const hasCursors =
-      (await this.prisma.folderCursor.count({
-        where: { mailboxId: task.mailboxId, initializedAt: { not: null } },
-      })) === 2;
+    const hasCursors = await this.hasInitializedCursor(
+      task.mailboxId,
+      task.mailbox.provider,
+    );
     const now = new Date();
     const result = await this.prisma.autoReplyTask.update({
       where: { id },
@@ -366,6 +372,9 @@ export class MailboxService {
     await this.prisma.$transaction([
       this.prisma.replyRule.deleteMany({ where: { taskId: id } }),
       this.prisma.folderCursor.deleteMany({
+        where: { mailboxId: task.mailboxId },
+      }),
+      this.prisma.gmailCursor.deleteMany({
         where: { mailboxId: task.mailboxId },
       }),
       this.prisma.autoReplyTask.update({
@@ -575,5 +584,23 @@ export class MailboxService {
         AND receipt."taskId" = ${taskId}
         AND outbox."kind" IN ('PROCESS_MESSAGE', 'VERIFY_SEND')
     `;
+  }
+
+  private async hasInitializedCursor(
+    mailboxId: string,
+    provider: "MICROSOFT" | "GOOGLE",
+  ): Promise<boolean> {
+    if (provider === "GOOGLE")
+      return Boolean(
+        await this.prisma.gmailCursor.findFirst({
+          where: { mailboxId, initializedAt: { not: null } },
+          select: { id: true },
+        }),
+      );
+    return (
+      (await this.prisma.folderCursor.count({
+        where: { mailboxId, initializedAt: { not: null } },
+      })) === 2
+    );
   }
 }

@@ -52,9 +52,9 @@ install_docker() {
 install_docker
 
 echo ""
-echo "MailPilot Microsoft 邮箱自动回复系统安装"
+echo "MailPilot Microsoft 与 Gmail 邮箱自动回复系统安装"
 echo "-----------------------------------------"
-read -r -p "后台 HTTPS 公开地址（可留空，留空时暂不能连接 Microsoft）: " PUBLIC_URL
+read -r -p "后台 HTTPS 公开地址（可留空，留空时暂不能连接 Microsoft 或 Gmail）: " PUBLIC_URL
 if [[ -n "$PUBLIC_URL" && ! "$PUBLIC_URL" =~ ^https://[^/@?#[:space:]]+/?$ ]]; then
   echo "公开地址必须是纯 HTTPS 域名（可含端口），不能包含路径、查询参数或账号信息"
   exit 1

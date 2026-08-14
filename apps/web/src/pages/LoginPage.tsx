@@ -34,7 +34,7 @@ export function LoginPage({ onLogin }: { onLogin: (admin: Admin) => void }) {
           <MailCheck />
         </div>
         <h1>MailPilot</h1>
-        <p>Microsoft 邮箱自动回复控制台</p>
+        <p>Microsoft 与 Gmail 邮箱自动回复控制台</p>
       </div>
       <form className="login-card" onSubmit={submit}>
         <div>

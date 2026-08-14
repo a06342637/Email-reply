@@ -62,7 +62,7 @@ export function DashboardPage() {
     <>
       <PageHeader
         title="运行概览"
-        description="邮箱检测、回复队列和 Microsoft Graph 健康状态。"
+        description="邮箱检测、回复队列和邮件提供商 API 健康状态。"
       />
       <div className="metric-grid">
         <Metric

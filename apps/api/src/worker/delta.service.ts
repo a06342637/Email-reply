@@ -48,7 +48,8 @@ export class DeltaService {
     if (
       !task ||
       !["INITIALIZING", "RUNNING"].includes(task.status) ||
-      task.mailbox.status !== "CONNECTED"
+      task.mailbox.status !== "CONNECTED" ||
+      (task.mailbox.provider && task.mailbox.provider !== "MICROSOFT")
     )
       return;
     const startedAt = Date.now();
@@ -314,75 +315,69 @@ export class DeltaService {
           throw new PollInactiveError();
         for (const item of prepared) {
           const message = item.message;
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${task.mailboxId}:message:${message.id}`}))`;
           if (message.internetMessageId) {
             await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${task.mailboxId}:${message.internetMessageId}`}))`;
-            const existingByInternetId = await tx.messageReceipt.findFirst({
-              where: {
-                mailboxId: task.mailboxId,
-                internetMessageId: message.internetMessageId,
-              },
-              select: { id: true },
-            });
-            if (existingByInternetId) continue;
           }
-          try {
-            const receipt = await tx.messageReceipt.create({
+          const duplicate = await tx.messageReceipt.findFirst({
+            where: {
+              mailboxId: task.mailboxId,
+              OR: [
+                { graphMessageId: message.id },
+                ...(message.internetMessageId
+                  ? [{ internetMessageId: message.internetMessageId }]
+                  : []),
+              ],
+            },
+            select: { id: true },
+          });
+          if (duplicate) continue;
+          const receipt = await tx.messageReceipt.create({
+            data: {
+              mailboxId: task.mailboxId,
+              taskId: task.id,
+              graphMessageId: message.id,
+              internetMessageId: message.internetMessageId,
+              conversationId: message.conversationId,
+              folder,
+              senderName: item.senderName,
+              senderEmail: item.senderEmail || "unknown",
+              replyToEmail: item.replyToEmail || null,
+              subject: (message.subject ?? "(无主题)").slice(0, 998),
+              receivedAt: item.receivedAt,
+              state: item.filterReason ? "FILTERED" : "QUEUED",
+              filterReason: item.filterReason,
+              ruleId: item.rule?.id,
+              templateRevisionId: item.filterReason ? null : item.revisionId,
+              trackingId: randomUUID(),
+              completedAt: item.filterReason ? now : null,
+            },
+          });
+          await tx.processingLog.create({
+            data: {
+              mailboxId: task.mailboxId,
+              mailboxEmail: task.mailbox.email,
+              receiptId: receipt.id,
+              event: item.filterReason ? "MESSAGE_FILTERED" : "MESSAGE_QUEUED",
+              senderEmail: item.senderEmail,
+              subject: receipt.subject,
+              folder,
+              ruleName: item.rule?.name,
+              templateName:
+                item.rule?.template.name ?? task.defaultTemplate?.name,
+              status: receipt.state,
+              reason: item.filterReason,
+            },
+          });
+          if (!item.filterReason) {
+            await tx.transactionalOutbox.create({
               data: {
-                mailboxId: task.mailboxId,
-                taskId: task.id,
-                graphMessageId: message.id,
-                internetMessageId: message.internetMessageId,
-                conversationId: message.conversationId,
-                folder,
-                senderName: item.senderName,
-                senderEmail: item.senderEmail || "unknown",
-                replyToEmail: item.replyToEmail || null,
-                subject: (message.subject ?? "(无主题)").slice(0, 998),
-                receivedAt: item.receivedAt,
-                state: item.filterReason ? "FILTERED" : "QUEUED",
-                filterReason: item.filterReason,
-                ruleId: item.rule?.id,
-                templateRevisionId: item.filterReason ? null : item.revisionId,
-                trackingId: randomUUID(),
-                completedAt: item.filterReason ? now : null,
+                kind: "PROCESS_MESSAGE",
+                aggregateId: receipt.id,
+                dedupeKey: `process:${receipt.id}`,
+                payload: { receiptId: receipt.id } as Prisma.InputJsonValue,
               },
             });
-            await tx.processingLog.create({
-              data: {
-                mailboxId: task.mailboxId,
-                mailboxEmail: task.mailbox.email,
-                receiptId: receipt.id,
-                event: item.filterReason
-                  ? "MESSAGE_FILTERED"
-                  : "MESSAGE_QUEUED",
-                senderEmail: item.senderEmail,
-                subject: receipt.subject,
-                folder,
-                ruleName: item.rule?.name,
-                templateName:
-                  item.rule?.template.name ?? task.defaultTemplate?.name,
-                status: receipt.state,
-                reason: item.filterReason,
-              },
-            });
-            if (!item.filterReason) {
-              await tx.transactionalOutbox.create({
-                data: {
-                  kind: "PROCESS_MESSAGE",
-                  aggregateId: receipt.id,
-                  dedupeKey: `process:${receipt.id}`,
-                  payload: { receiptId: receipt.id } as Prisma.InputJsonValue,
-                },
-              });
-            }
-          } catch (error) {
-            if (!(
-              typeof error === "object" &&
-              error &&
-              "code" in error &&
-              (error as { code: unknown }).code === "P2002"
-            ))
-              throw error;
           }
         }
         const pageHighWater = prepared.reduce<Date | null>(
@@ -503,13 +498,14 @@ export class DeltaService {
       where: { id: taskId },
       select: {
         status: true,
-        mailbox: { select: { status: true } },
+        mailbox: { select: { status: true, provider: true } },
       },
     });
     if (
       !task ||
       !["INITIALIZING", "RUNNING"].includes(task.status) ||
-      task.mailbox.status !== "CONNECTED"
+      task.mailbox.status !== "CONNECTED" ||
+      (task.mailbox.provider && task.mailbox.provider !== "MICROSOFT")
     )
       throw new PollInactiveError();
   }

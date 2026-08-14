@@ -3,7 +3,7 @@ import { hostname } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { AppConfig } from "../core/config.js";
 import { PrismaService } from "../core/prisma.js";
-import { DeltaService } from "./delta.service.js";
+import { ProviderPollService } from "./provider-poll.service.js";
 import { OutboxDispatcherService, QueueService } from "./queue.service.js";
 import { AlertService } from "../observability/alert.service.js";
 import { RestoreBarrierService } from "../backup/restore-barrier.service.js";
@@ -17,7 +17,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: AppConfig,
-    private readonly delta: DeltaService,
+    private readonly polling: ProviderPollService,
     private readonly outbox: OutboxDispatcherService,
     private readonly queues: QueueService,
     private readonly alerts: AlertService,
@@ -57,7 +57,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             this.withLock(
               `lock:poll:${task.mailboxId}`,
               Math.max(15_000, task.pollIntervalSeconds * 4_000),
-              () => this.delta.pollTask(task.id),
+              () => this.polling.pollTask(task.id),
             ),
           ),
         );

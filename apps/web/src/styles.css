@@ -365,6 +365,11 @@ label small {
   display: flex;
   gap: 10px;
 }
+.provider-connect-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
 .card {
   background: color-mix(in srgb, var(--surface) 96%, transparent);
   border: 1px solid var(--line);
@@ -570,11 +575,23 @@ label small {
 .info-strip span {
   font-size: 12px;
 }
+.provider-permissions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.provider-permissions .info-strip {
+  margin-bottom: 0;
+}
 .mailbox-grid,
 .template-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 17px;
+}
+.mailbox-card {
+  min-width: 0;
 }
 .mailbox-title {
   display: flex;
@@ -1521,7 +1538,7 @@ td small {
   }
   .mailbox-grid,
   .template-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .template-editor {
     grid-template-columns: 1fr;
@@ -1603,6 +1620,9 @@ td small {
   .template-grid,
   .backup-grid,
   .system-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .provider-permissions {
     grid-template-columns: 1fr;
   }
   .processing-periods {

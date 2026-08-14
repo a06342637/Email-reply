@@ -3,7 +3,7 @@ import { domainToASCII } from "node:url";
 import { PrismaService } from "../core/prisma.js";
 import type { RuleConditions } from "@autoreply/shared";
 
-export type IncomingGraphMessage = {
+export type IncomingMessage = {
   id: string;
   internetMessageId?: string | null;
   conversationId?: string | null;
@@ -15,6 +15,9 @@ export type IncomingGraphMessage = {
   internetMessageHeaders?: Array<{ name: string; value: string }>;
   "@removed"?: { reason?: string };
 };
+
+/** @deprecated Use IncomingMessage. Kept for legacy source compatibility. */
+export type IncomingGraphMessage = IncomingMessage;
 
 const MICROSOFT_CORE_DOMAINS = [
   "microsoft.com",
@@ -33,7 +36,7 @@ export class FilterService {
   constructor(private readonly prisma: PrismaService) {}
 
   async evaluate(
-    message: IncomingGraphMessage,
+    message: IncomingMessage,
     mailboxEmail: string,
   ): Promise<{
     skip?: string;
@@ -190,7 +193,7 @@ export class FilterService {
   }
 
   matchRule(
-    message: IncomingGraphMessage,
+    message: IncomingMessage,
     senderEmail: string,
     folder: "inbox" | "junkemail",
     conditions: RuleConditions,
@@ -242,7 +245,7 @@ export class FilterService {
     return true;
   }
 
-  private headers(message: IncomingGraphMessage): Map<string, string> {
+  private headers(message: IncomingMessage): Map<string, string> {
     const map = new Map<string, string>();
     for (const header of message.internetMessageHeaders ?? [])
       map.set(header.name.toLowerCase(), header.value);

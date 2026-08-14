@@ -6,6 +6,7 @@ import { AppError } from "../core/http.js";
 const PUBLIC_PATHS = new Set([
   "/api/v1/auth/login",
   "/api/v1/microsoft/oauth/callback",
+  "/api/v1/google/oauth/callback",
   "/health/live",
   "/health/ready",
 ]);
