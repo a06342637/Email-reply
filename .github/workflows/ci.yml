@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://autoreply:test@127.0.0.1:5432/autoreply?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run audit:prod
+      - run: npx prisma validate
+      - run: npx yaml-lint compose.yml
+      - run: bash -n install.sh update.sh scripts/autoreply
+
+  docker-smoke:
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated CI configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          app_version=$(tr -d '[:space:]' < VERSION)
+          instance_key=$(openssl rand -base64 32 | tr -d '\n')
+          session_secret=$(openssl rand -hex 32)
+          cat > .env <<EOF
+          NODE_ENV=production
+          APP_VERSION=$app_version
+          APP_HOST=0.0.0.0
+          APP_PORT=3000
+          HOST_BIND=127.0.0.1
+          HOST_PORT=18080
+          PUBLIC_URL=
+          DATABASE_URL=postgresql://autoreply:ci-postgres-password@postgres:5432/autoreply?schema=public
+          POSTGRES_DB=autoreply
+          POSTGRES_USER=autoreply
+          POSTGRES_PASSWORD=ci-postgres-password
+          REDIS_URL=redis://redis:6379
+          INSTANCE_KEY=$instance_key
+          SESSION_SECRET=$session_secret
+          TRUST_PROXY=1
+          TZ=Asia/Shanghai
+          LOG_LEVEL=info
+          BOOTSTRAP_FILE=/bootstrap/admin.json
+          WORKER_ID=worker-1
+          EOF
+          project_name=$(docker compose config --format json | jq -r '.name')
+          bootstrap_volume="${project_name}_bootstrap_data"
+          docker volume create "$bootstrap_volume"
+          docker run --rm -v "$bootstrap_volume:/bootstrap" alpine:3.21 sh -c \
+            'printf "%s" "$1" > /bootstrap/admin.json && chmod 0600 /bootstrap/admin.json && chown 10001:10001 /bootstrap/admin.json' \
+            _ '{"username":"ci_admin","password":"ci-password-123456","randomUsername":false,"randomPassword":false}'
+      - name: Build and start the complete stack
+        run: docker compose up -d --build
+      - name: Verify readiness and operations CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ready=false
+          for _ in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:18080/health/ready >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" = true
+          curl -fsS http://127.0.0.1:18080/health/live
+          curl -fsS http://127.0.0.1:18080/health/ready
+          test "$(docker compose exec -T app autoreply admin show-username)" = "ci_admin"
+          docker compose exec -T app autoreply doctor
+      - name: Show container state
+        if: always()
+        run: |
+          docker compose ps -a || true
+          docker compose logs --no-color --tail=300 app worker migrate postgres redis || true
+      - name: Clean up
+        if: always()
+        run: docker compose down -v --remove-orphans || true

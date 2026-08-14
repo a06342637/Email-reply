@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.bootstrap/
+coverage/
+*.tsbuildinfo
+*.log
+*.tmp
+.DS_Store
+.idea/
+.vscode/
+apps/web/public/uploads/
+backups/
+prisma/dev.db

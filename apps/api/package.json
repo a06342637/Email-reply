@@ -1,0 +1,51 @@
+{
+  "name": "@autoreply/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src --max-warnings=0"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^5.5.0",
+    "@nestjs/common": "^11.1.29",
+    "@nestjs/core": "^11.1.29",
+    "@nestjs/platform-express": "^11.1.29",
+    "@nestjs/serve-static": "^5.0.5",
+    "@node-rs/argon2": "^2.0.2",
+    "@prisma/client": "^6.15.0",
+    "bullmq": "^5.58.5",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
+    "cookie-parser": "^1.4.7",
+    "dayjs": "^1.11.13",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.0.1",
+    "helmet": "^8.1.0",
+    "html-to-text": "9.0.5",
+    "ioredis": "^5.7.0",
+    "libsodium-wrappers-sumo": "0.7.15",
+    "liquidjs": "^10.21.1",
+    "nanoid": "^5.1.5",
+    "otplib": "^12.0.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "sanitize-html": "^2.17.7",
+    "undici": "^7.15.0"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.9",
+    "@types/express": "^5.0.3",
+    "@types/html-to-text": "^9.0.4",
+    "@types/libsodium-wrappers-sumo": "^0.7.8",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^24.3.0",
+    "@types/sanitize-html": "^2.16.0",
+    "tsx": "^4.20.5",
+    "vitest": "^3.2.4"
+  }
+}

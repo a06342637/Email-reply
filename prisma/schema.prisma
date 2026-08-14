@@ -1,0 +1,421 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MailboxStatus {
+  CONNECTED
+  AUTH_REQUIRED
+  DISABLED
+  REMOVED
+}
+
+enum TaskStatus {
+  DRAFT
+  INITIALIZING
+  RUNNING
+  PAUSED
+  CIRCUIT_OPEN
+  DELETED
+}
+
+enum FolderKind {
+  INBOX
+  JUNKEMAIL
+}
+
+enum MessageState {
+  DISCOVERED
+  FILTERED
+  QUEUED
+  CREATING_DRAFT
+  DRAFT_READY
+  SENDING
+  SENT
+  FAILED_CONFIRMED
+  UNCERTAIN
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum OutboxKind {
+  PROCESS_MESSAGE
+  VERIFY_SEND
+  WEBHOOK
+}
+
+model AdminUser {
+  id                 String          @id @default(uuid())
+  username           String          @unique
+  passwordHash       String
+  mustChangePassword Boolean         @default(false)
+  failedLoginCount   Int             @default(0)
+  lockedUntil        DateTime?
+  theme              String          @default("system")
+  bootstrapLoggedAt  DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  sessions           AdminSession[]
+  totp               TotpCredential?
+  auditLogs          AuditLog[]
+}
+
+model AdminSession {
+  id                   String    @id @default(uuid())
+  adminId              String
+  tokenHash            String    @unique
+  csrfHash             String
+  pendingTotpEncrypted String?
+  ipAddress            String?
+  userAgent            String?
+  createdAt            DateTime  @default(now())
+  lastSeenAt           DateTime  @default(now())
+  expiresAt            DateTime
+  absoluteExpiresAt    DateTime
+  admin                AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([expiresAt])
+}
+
+model TotpCredential {
+  id                 String    @id @default(uuid())
+  adminId            String    @unique
+  secretEncrypted    String
+  recoveryCodeHashes Json
+  enabledAt          DateTime  @default(now())
+  admin              AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+}
+
+model MicrosoftAppConfig {
+  id                    String    @id @default("singleton")
+  clientId              String
+  clientSecretEncrypted String
+  secretExpiresAt       DateTime?
+  updatedAt             DateTime  @updatedAt
+}
+
+model OAuthState {
+  id                String   @id
+  stateHash         String   @unique
+  verifierEncrypted String
+  redirectAfter     String?
+  createdAt         DateTime @default(now())
+  expiresAt         DateTime
+}
+
+model Mailbox {
+  id                  String           @id @default(uuid())
+  email               String           @unique
+  displayName         String
+  tenantId            String?
+  accountType         String           @default("UNKNOWN")
+  homeAccountId       String
+  tokenCacheEncrypted String
+  status              MailboxStatus    @default(CONNECTED)
+  lastTokenRefreshAt  DateTime?
+  lastErrorCode       String?
+  lastErrorMessage    String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  task                AutoReplyTask?
+  cursors             FolderCursor[]
+  receipts            MessageReceipt[]
+  logs                ProcessingLog[]
+}
+
+model AutoReplyTask {
+  id                   String           @id @default(uuid())
+  mailboxId            String           @unique
+  name                 String
+  status               TaskStatus       @default(DRAFT)
+  pollIntervalSeconds  Int              @default(30)
+  backlogPerMinute     Int              @default(20)
+  defaultTemplateId    String?
+  activationAt         DateTime?
+  pausedAt             DateTime?
+  nextPollAt           DateTime?
+  lastPollStartedAt    DateTime?
+  lastPollCompletedAt  DateTime?
+  averagePollLatencyMs Int?
+  consecutiveFailures  Int              @default(0)
+  circuitOpenedAt      DateTime?
+  graphBackoffUntil    DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  deletedAt            DateTime?
+  mailbox              Mailbox          @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  defaultTemplate      ReplyTemplate?   @relation("DefaultTaskTemplate", fields: [defaultTemplateId], references: [id], onDelete: SetNull)
+  rules                ReplyRule[]
+  receipts             MessageReceipt[]
+
+  @@index([status, nextPollAt])
+}
+
+model FolderCursor {
+  id                 String     @id @default(uuid())
+  mailboxId          String
+  folder             FolderKind
+  deltaLinkEncrypted String?
+  nextLinkEncrypted  String?
+  lastSuccessfulAt   DateTime?
+  highWaterAt        DateTime?
+  initializedAt      DateTime?
+  updatedAt          DateTime   @updatedAt
+  mailbox            Mailbox    @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+
+  @@unique([mailboxId, folder])
+}
+
+model ReplyTemplate {
+  id                  String             @id @default(uuid())
+  name                String
+  description         String?
+  archivedAt          DateTime?
+  publishedRevisionId String?            @unique
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  revisions           TemplateRevision[] @relation("TemplateRevisions")
+  publishedRevision   TemplateRevision?  @relation("PublishedRevision", fields: [publishedRevisionId], references: [id], onDelete: SetNull)
+  defaultForTasks     AutoReplyTask[]    @relation("DefaultTaskTemplate")
+  rules               ReplyRule[]
+}
+
+model TemplateRevision {
+  id                   String           @id @default(uuid())
+  templateId           String
+  version              Int
+  subjectTemplate      String           @default("Re: {{ message.subject }}")
+  htmlContent          String
+  textContent          String
+  sanitizedHtml        String
+  createdAt            DateTime         @default(now())
+  publishedAt          DateTime?
+  template             ReplyTemplate    @relation("TemplateRevisions", fields: [templateId], references: [id], onDelete: Cascade)
+  publishedForTemplate ReplyTemplate?   @relation("PublishedRevision")
+  assets               TemplateAsset[]
+  receipts             MessageReceipt[]
+
+  @@unique([templateId, version])
+  @@index([templateId, createdAt])
+}
+
+model TemplateAsset {
+  id          String           @id @default(uuid())
+  revisionId  String
+  fileName    String
+  contentType String
+  size        Int
+  inline      Boolean          @default(false)
+  contentId   String?
+  data        Bytes
+  createdAt   DateTime         @default(now())
+  revision    TemplateRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+}
+
+model ReplyRule {
+  id         String           @id @default(uuid())
+  taskId     String
+  name       String
+  priority   Int
+  enabled    Boolean          @default(true)
+  conditions Json
+  templateId String
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  task       AutoReplyTask    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  template   ReplyTemplate    @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  receipts   MessageReceipt[]
+
+  @@unique([taskId, priority])
+  @@index([taskId, enabled, priority])
+}
+
+model MessageReceipt {
+  id                 String            @id @default(uuid())
+  mailboxId          String
+  taskId             String
+  graphMessageId     String
+  internetMessageId  String?
+  conversationId     String?
+  folder             FolderKind
+  senderName         String?
+  senderEmail        String
+  replyToEmail       String?
+  subject            String
+  receivedAt         DateTime
+  state              MessageState      @default(DISCOVERED)
+  filterReason       String?
+  ruleId             String?
+  templateRevisionId String?
+  trackingId         String            @unique
+  retryCount         Int               @default(0)
+  lastErrorCode      String?
+  lastErrorMessage   String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  completedAt        DateTime?
+  mailbox            Mailbox           @relation(fields: [mailboxId], references: [id], onDelete: Restrict)
+  task               AutoReplyTask     @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  rule               ReplyRule?        @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  templateRevision   TemplateRevision? @relation(fields: [templateRevisionId], references: [id], onDelete: SetNull)
+  attempts           ReplyAttempt[]
+  logs               ProcessingLog[]
+
+  @@unique([mailboxId, graphMessageId])
+  @@index([mailboxId, internetMessageId])
+  @@index([state, createdAt])
+  @@index([taskId, receivedAt])
+}
+
+model ReplyAttempt {
+  id                String         @id @default(uuid())
+  receiptId         String
+  number            Int
+  state             MessageState
+  draftMessageId    String?
+  draftInternetId   String?
+  uploadedAssetIds  Json           @default("[]")
+  verificationPhase String?
+  verificationStage Int            @default(0)
+  startedAt         DateTime       @default(now())
+  sentAcceptedAt    DateTime?
+  verifiedAt        DateTime?
+  errorCode         String?
+  errorMessage      String?
+  receipt           MessageReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+
+  @@unique([receiptId, number])
+  @@index([state, startedAt])
+}
+
+model TransactionalOutbox {
+  id          String     @id @default(uuid())
+  kind        OutboxKind
+  aggregateId String
+  dedupeKey   String?    @unique
+  payload     Json
+  availableAt DateTime   @default(now())
+  publishedAt DateTime?
+  attempts    Int        @default(0)
+  lastError   String?
+  createdAt   DateTime   @default(now())
+
+  @@index([publishedAt, availableAt])
+}
+
+model ProcessingLog {
+  id           String          @id @default(uuid())
+  mailboxId    String?
+  mailboxEmail String
+  receiptId    String?
+  level        String          @default("INFO")
+  event        String
+  senderEmail  String?
+  subject      String?
+  folder       FolderKind?
+  ruleName     String?
+  templateName String?
+  status       MessageState?
+  reason       String?
+  errorCode    String?
+  requestId    String?
+  occurredAt   DateTime        @default(now())
+  mailbox      Mailbox?        @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
+  receipt      MessageReceipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+
+  @@index([occurredAt])
+  @@index([mailboxId, occurredAt])
+  @@index([status, occurredAt])
+}
+
+model SystemLog {
+  id         String   @id @default(uuid())
+  level      String
+  component  String
+  event      String
+  message    String
+  requestId  String?
+  metadata   Json?
+  occurredAt DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([level, occurredAt])
+}
+
+model AuditLog {
+  id         String     @id @default(uuid())
+  adminId    String?
+  action     String
+  entityType String?
+  entityId   String?
+  ipAddress  String?
+  requestId  String?
+  metadata   Json?
+  occurredAt DateTime   @default(now())
+  admin      AdminUser? @relation(fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([occurredAt])
+  @@index([adminId, occurredAt])
+}
+
+model Alert {
+  id             String        @id @default(uuid())
+  fingerprint    String
+  type           String
+  severity       AlertSeverity
+  status         AlertStatus   @default(OPEN)
+  title          String
+  message        String
+  metadata       Json?
+  firstSeenAt    DateTime      @default(now())
+  lastSeenAt     DateTime      @default(now())
+  acknowledgedAt DateTime?
+  resolvedAt     DateTime?
+
+  @@index([fingerprint, status])
+  @@index([status, lastSeenAt])
+}
+
+model WebhookEndpoint {
+  id              String    @id @default(uuid())
+  name            String
+  url             String
+  secretEncrypted String
+  enabled         Boolean   @default(true)
+  eventTypes      Json
+  lastSuccessAt   DateTime?
+  lastFailureAt   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model WorkerHeartbeat {
+  id        String   @id
+  role      String
+  hostname  String
+  pid       Int
+  metadata  Json?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
