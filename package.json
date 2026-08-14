@@ -40,7 +40,8 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.3"
+    "@prisma/client": "^6.19.3",
+    "class-validator": "0.14.4"
   },
   "optionalDependencies": {
     "@esbuild/linux-arm64": "0.28.2",
