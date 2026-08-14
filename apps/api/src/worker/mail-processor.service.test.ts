@@ -154,6 +154,41 @@ describe("MailProcessorService", () => {
     );
   });
 
+  it("treats an unrelated Microsoft access denial as a confirmed send failure", async () => {
+    const { service, prisma, transport } = fixture(
+      [
+        baseReceipt,
+        baseReceipt,
+        { task: { status: "RUNNING" }, mailbox: { status: "CONNECTED" } },
+        baseReceipt,
+      ],
+      async () => ({
+        subject: "Re: Order question",
+        html: "<p>Received</p>",
+        text: "Received",
+        assets: [],
+      }),
+    );
+    transport.createReplyDraft.mockRejectedValue(
+      new GraphError(
+        403,
+        "ErrorAccessDenied",
+        "Operation is not allowed for this message",
+      ),
+    );
+
+    await service.process(baseReceipt.id);
+
+    expect(prisma.messageReceipt.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          state: "FAILED_CONFIRMED",
+          lastErrorCode: "ErrorAccessDenied",
+        }),
+      }),
+    );
+  });
+
   it("keeps a claimed message queued when the task is paused before draft creation", async () => {
     const pausedReceipt = {
       ...baseReceipt,
@@ -213,5 +248,43 @@ describe("MailProcessorService", () => {
         }),
       }),
     );
+  });
+
+  it("preserves a send verification until the mailbox is reauthorized", async () => {
+    const { service, prisma, transport } = fixture([baseReceipt], async () => ({
+      subject: "Re: Order question",
+      html: "<p>Received</p>",
+      text: "Received",
+      assets: [],
+    }));
+    prisma.replyAttempt.findUnique.mockResolvedValue({
+      id: "attempt-1",
+      receiptId: baseReceipt.id,
+      state: "SENDING",
+      draftMessageId: "draft-1",
+      sentAcceptedAt: new Date("2026-08-14T10:00:02.000Z"),
+      startedAt: new Date("2026-08-14T10:00:01.000Z"),
+      uploadedAssetIds: [],
+    });
+    transport.getMessage.mockRejectedValue(
+      new GraphError(401, "InvalidAuthenticationToken", "Expired"),
+    );
+
+    await service.verify(baseReceipt.id, "attempt-1", 0, "SEND");
+
+    expect(prisma.messageReceipt.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lastErrorCode: "InvalidAuthenticationToken",
+          completedAt: null,
+        }),
+      }),
+    );
+    expect(prisma.messageReceipt.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: "UNCERTAIN" }),
+      }),
+    );
+    expect(prisma.transactionalOutbox.upsert).not.toHaveBeenCalled();
   });
 });

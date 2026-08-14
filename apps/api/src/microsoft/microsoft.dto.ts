@@ -34,3 +34,13 @@ export class OAuthStartDto {
   @MaxLength(512)
   redirectAfter?: string;
 }
+
+export class MicrosoftRefreshTokenImportDto {
+  @IsString()
+  @IsUUID()
+  clientId!: string;
+
+  @IsString()
+  @Length(20, 16_384)
+  refreshToken!: string;
+}

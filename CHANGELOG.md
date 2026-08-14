@@ -1,5 +1,20 @@
 # 更新日志
 
+## v0.03 - 2026-08-15
+
+- Microsoft 邮箱新增两种授权入口：OAuth 网页登录（推荐）与 Client ID + Refresh Token 高级导入。
+- 高级导入会先通过 Microsoft v2 Token Endpoint 换取 Access Token，校验 User.Read、Mail.ReadWrite、Mail.Send，读取 `/me`，并实际验证 inbox 与 junkemail 可读；任一步失败都不会写入邮箱。
+- 新增每邮箱 Microsoft 授权模式和独立 Client ID；系统级 Microsoft Client ID/Secret 变更只影响 MSAL OAuth 邮箱，不会误停手工导入邮箱。
+- 独立 Refresh Token、轮换后的 Refresh Token 和短期 Access Token 使用实例主密钥加密保存；后台不回显 Refresh Token，审计日志不记录 Token。
+- Microsoft Graph 遇到 401 时先强制刷新一次令牌；无关的 `ErrorAccessDenied` 403 不再误判为授权失效。
+- 授权失效更新加入 Token Cache 条件竞争保护，旧 Refresh Token 的迟到失败不会覆盖管理员刚导入的新凭据；凭据已变化时会自动改用最新缓存重试。
+- 修复发送状态核验期间授权失效可能过早进入 `UNCERTAIN` 的问题；未发送草稿与待核验发送会保留，重新授权并恢复任务后继续安全核验。
+- OAuth 重新连接可将手工导入邮箱安全切回 MSAL；高级导入也可更新现有 Microsoft 邮箱，同时保留任务、游标和历史去重数据。
+- 已移除邮箱允许在 Microsoft 与 Gmail 之间重新绑定；活动邮箱仍禁止跨提供商覆盖，Google 重连时会清理遗留的 Microsoft 授权模式字段。
+- 备份恢复新增 Microsoft 授权模式兼容校验，并继续兼容没有该字段的 v0.01/v0.02 备份。
+- 后台新增 Microsoft 双方式连接弹窗、推荐标记、授权方式与独立 Client ID 展示，并补充完整安全说明和故障排查教程。
+- 增加 Refresh Token 轮换、权限缺失、撤销授权、401 强制刷新、并发凭据替换、MSAL Cache 无变化跳过写入、发送核验恢复、非授权 403、跨提供商重连、系统配置隔离、OAuth 模式切换和备份兼容测试；当前共 23 个测试文件、89 项后端测试。
+
 ## v0.02 - 2026-08-15
 
 - 新增 Gmail 个人邮箱和 Google Workspace 用户邮箱支持。

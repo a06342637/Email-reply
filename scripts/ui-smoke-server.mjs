@@ -22,7 +22,7 @@ let smokeSettings = {
   dedupeDays: 365,
   sessionIdleMinutes: 120,
   sessionAbsoluteMinutes: 720,
-  version: "0.02",
+  version: "0.03",
 };
 
 const template = {
@@ -69,6 +69,8 @@ const mailbox = {
   id: "mailbox-1",
   email: "service@example.com",
   provider: "MICROSOFT",
+  microsoftAuthMode: "MSAL_OAUTH",
+  microsoftClientId: null,
   displayName: "客户服务",
   tenantId: "tenant-1",
   accountType: "MICROSOFT_365",
@@ -129,6 +131,24 @@ const gmailMailbox = {
     initializedAt: now,
     highWaterAt: now,
   },
+  task: null,
+};
+
+const manualMicrosoftMailbox = {
+  id: "mailbox-microsoft-manual-1",
+  email: "manual@example.com",
+  provider: "MICROSOFT",
+  microsoftAuthMode: "CLIENT_ID_REFRESH_TOKEN",
+  microsoftClientId: "11111111-1111-4111-8111-111111111111",
+  displayName: "独立授权邮箱",
+  tenantId: null,
+  accountType: "PERSONAL",
+  status: "CONNECTED",
+  lastTokenRefreshAt: now,
+  cursors: [
+    { folder: "INBOX", lastSuccessfulAt: now, initializedAt: now },
+    { folder: "JUNKEMAIL", lastSuccessfulAt: now, initializedAt: now },
+  ],
   task: null,
 };
 
@@ -203,8 +223,16 @@ function api(path, method, body, res) {
     return json(res, [
       { ...mailbox, task: taskDeleted ? null : mailbox.task },
       gmailMailbox,
+      manualMicrosoftMailbox,
     ]);
   }
+  if (path === "/api/v1/microsoft/import-refresh-token" && method === "POST")
+    return json(res, {
+      mailboxId: "mailbox-imported-1",
+      email: "imported@example.com",
+      displayName: "导入测试邮箱",
+      authMode: "CLIENT_ID_REFRESH_TOKEN",
+    });
   if (path === "/api/v1/mailboxes/mailbox-1" && method === "DELETE") {
     mailboxRemoved = true;
     return json(res, { ok: true });
@@ -272,7 +300,7 @@ function api(path, method, body, res) {
     });
   if (path === "/api/v1/system/info")
     return json(res, {
-      version: "0.02",
+      version: "0.03",
       node: process.version,
       database: true,
       redis: true,

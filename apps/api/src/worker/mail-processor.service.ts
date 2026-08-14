@@ -244,6 +244,11 @@ export class MailProcessorService {
       ["SENT", "FAILED_CONFIRMED", "UNCERTAIN"].includes(receipt.state)
     )
       return;
+    if (
+      !["RUNNING", "INITIALIZING"].includes(receipt.task.status) ||
+      receipt.mailbox.status !== "CONNECTED"
+    )
+      return;
 
     if (
       phase === "CREATE" &&
@@ -357,6 +362,28 @@ export class MailProcessorService {
         "多次核验后仍无法确认邮件是否已发送",
       );
     } catch (error) {
+      if (this.isAuthorizationError(error)) {
+        if (
+          phase === "CREATE" &&
+          attempt.state !== "SENDING" &&
+          !attempt.sentAcceptedAt
+        )
+          await this.deferUnsent(
+            receiptId,
+            attemptId,
+            attempt.draftMessageId ?? undefined,
+            this.errorCode(error),
+            this.errorMessage(error),
+          );
+        else
+          await this.deferVerificationForAuthorization(
+            receiptId,
+            attemptId,
+            this.errorCode(error),
+            this.errorMessage(error),
+          );
+        return;
+      }
       if (stage + 1 < VERIFY_DELAYS_SECONDS.length) {
         await this.enqueueVerification(receiptId, attemptId, stage + 1, phase);
       } else {
@@ -736,6 +763,31 @@ export class MailProcessorService {
     ]);
   }
 
+  private async deferVerificationForAuthorization(
+    receiptId: string,
+    attemptId: string,
+    code: string,
+    message: string,
+  ): Promise<void> {
+    await this.prisma.$transaction([
+      this.prisma.replyAttempt.update({
+        where: { id: attemptId },
+        data: {
+          errorCode: code,
+          errorMessage: message.slice(0, 1_000),
+        },
+      }),
+      this.prisma.messageReceipt.update({
+        where: { id: receiptId },
+        data: {
+          lastErrorCode: code,
+          lastErrorMessage: message.slice(0, 1_000),
+          completedAt: null,
+        },
+      }),
+    ]);
+  }
+
   private isUncertainTransportError(error: unknown): boolean {
     return (
       error instanceof ProviderApiError &&
@@ -745,13 +797,20 @@ export class MailProcessorService {
 
   private isAuthorizationError(error: unknown): boolean {
     return (
-      (error instanceof AppError && error.code === "MAILBOX_AUTH_REQUIRED") ||
+      (error instanceof AppError &&
+        ["MAILBOX_AUTH_REQUIRED", "MAILBOX_NOT_CONNECTED"].includes(
+          error.code,
+        )) ||
       (error instanceof ProviderApiError &&
         (error.status === 401 ||
           (error.status === 403 &&
-            /InvalidAuthenticationToken|ErrorAccessDenied|authError|insufficientPermissions|invalidCredentials|unauthorized/i.test(
-              error.code,
-            ))))
+            (error.provider === "MICROSOFT"
+              ? /InvalidAuthenticationToken|AuthenticationError|InvalidToken|TokenExpired|token.+(?:expired|invalid|revoked)|(?:expired|invalid|revoked).+token/i.test(
+                  `${error.code} ${error.message}`,
+                )
+              : /authError|insufficientPermissions|invalidCredentials|unauthorized/i.test(
+                  error.code,
+                )))))
     );
   }
 

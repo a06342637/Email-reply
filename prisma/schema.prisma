@@ -19,6 +19,11 @@ enum MailProvider {
   GOOGLE
 }
 
+enum MicrosoftAuthMode {
+  MSAL_OAUTH
+  CLIENT_ID_REFRESH_TOKEN
+}
+
 enum TaskStatus {
   DRAFT
   INITIALIZING
@@ -135,6 +140,8 @@ model Mailbox {
   id                  String           @id @default(uuid())
   email               String           @unique
   provider            MailProvider     @default(MICROSOFT)
+  microsoftAuthMode   MicrosoftAuthMode @default(MSAL_OAUTH)
+  microsoftClientId   String?
   displayName         String
   tenantId            String?
   accountType         String           @default("UNKNOWN")
@@ -153,6 +160,7 @@ model Mailbox {
   logs                ProcessingLog[]
 
   @@index([provider, status])
+  @@index([provider, microsoftAuthMode, status])
 }
 
 model AutoReplyTask {

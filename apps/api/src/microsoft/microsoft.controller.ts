@@ -11,6 +11,7 @@ import {
 import type { Request, Response } from "express";
 import {
   MicrosoftConfigDto,
+  MicrosoftRefreshTokenImportDto,
   OAuthStartDto,
   PublicUrlDto,
 } from "./microsoft.dto.js";
@@ -52,6 +53,25 @@ export class MicrosoftController {
   async start(@Body() body: OAuthStartDto, @Req() req: Request) {
     const result = await this.microsoft.startOAuth(body.redirectAfter);
     await this.audit.write("MICROSOFT_OAUTH_STARTED", req);
+    return result;
+  }
+
+  @Post("import-refresh-token")
+  async importRefreshToken(
+    @Body() body: MicrosoftRefreshTokenImportDto,
+    @Req() req: Request,
+  ) {
+    const result = await this.microsoft.importRefreshToken(body);
+    await this.audit.write(
+      "MICROSOFT_REFRESH_TOKEN_IMPORTED",
+      req,
+      { type: "Mailbox", id: result.mailboxId },
+      {
+        clientId: body.clientId,
+        email: result.email,
+        authMode: result.authMode,
+      },
+    );
     return result;
   }
 

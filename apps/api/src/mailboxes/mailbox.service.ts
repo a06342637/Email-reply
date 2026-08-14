@@ -19,6 +19,8 @@ export class MailboxService {
         id: true,
         email: true,
         provider: true,
+        microsoftAuthMode: true,
+        microsoftClientId: true,
         displayName: true,
         tenantId: true,
         accountType: true,
@@ -173,6 +175,8 @@ export class MailboxService {
         where: { id },
         data: {
           status: "REMOVED",
+          microsoftAuthMode: "MSAL_OAUTH",
+          microsoftClientId: null,
           homeAccountId: `removed:${id}`,
           tokenCacheEncrypted: await this.crypto.encryptString(
             "{}",

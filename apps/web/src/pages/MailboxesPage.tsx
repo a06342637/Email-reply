@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  BadgeCheck,
   CirclePause,
+  FileKey2,
   KeyRound,
+  LogIn,
   MailPlus,
   Power,
   RefreshCw,
@@ -10,10 +13,25 @@ import {
 import { api, json } from "../api";
 import { useApp } from "../app-context";
 import type { Mailbox } from "../types";
-import { Card, Empty, Loading, PageHeader, Status, fmtDate } from "../ui";
+import {
+  Card,
+  Empty,
+  Loading,
+  Modal,
+  Notice,
+  PageHeader,
+  Status,
+  fmtDate,
+} from "../ui";
 export function MailboxesPage() {
   const { notify } = useApp();
   const [data, setData] = useState<Mailbox[]>();
+  const [microsoftDialog, setMicrosoftDialog] = useState(false);
+  const [refreshImport, setRefreshImport] = useState({
+    clientId: "",
+    refreshToken: "",
+  });
+  const [importing, setImporting] = useState(false);
   const load = useCallback(async () => {
     setData(await api("/api/v1/mailboxes"));
   }, []);
@@ -28,7 +46,7 @@ export function MailboxesPage() {
       notify(params.get("reason") || `${providerName} 授权失败`, "danger");
     if (oauth) history.replaceState({}, "", location.pathname);
   }, [load, notify]);
-  async function connect(provider: "microsoft" | "google") {
+  async function connectOAuth(provider: "microsoft" | "google") {
     try {
       const r = await api<{ authorizationUrl: string }>(
         `/api/v1/${provider}/oauth/start`,
@@ -37,6 +55,39 @@ export function MailboxesPage() {
       location.href = r.authorizationUrl;
     } catch (e) {
       notify(e instanceof Error ? e.message : "无法连接", "danger");
+    }
+  }
+  function openMicrosoft(mailbox?: Mailbox) {
+    setRefreshImport({
+      clientId: mailbox?.microsoftClientId || "",
+      refreshToken: "",
+    });
+    setMicrosoftDialog(true);
+  }
+  function closeMicrosoft() {
+    if (importing) return;
+    setMicrosoftDialog(false);
+    setRefreshImport({ clientId: "", refreshToken: "" });
+  }
+  async function importMicrosoftRefreshToken(event: React.FormEvent) {
+    event.preventDefault();
+    setImporting(true);
+    try {
+      const result = await api<{ email: string }>(
+        "/api/v1/microsoft/import-refresh-token",
+        json("POST", refreshImport),
+      );
+      setMicrosoftDialog(false);
+      setRefreshImport({ clientId: "", refreshToken: "" });
+      notify(`${result.email} 已通过 Refresh Token 安全导入`);
+      await load();
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "Microsoft 邮箱导入失败",
+        "danger",
+      );
+    } finally {
+      setImporting(false);
     }
   }
   async function act(id: string, action: string) {
@@ -60,14 +111,14 @@ export function MailboxesPage() {
     <>
       <PageHeader
         title="邮箱账号"
-        description="通过 Microsoft 或 Google OAuth 授权，不保存邮箱密码。"
+        description="Microsoft 支持 OAuth 登录或 Client ID + Refresh Token 导入；Gmail 使用 OAuth。系统不保存邮箱密码。"
         actions={
           <div className="provider-connect-actions">
-            <button className="primary" onClick={() => connect("microsoft")}>
+            <button className="primary" onClick={() => openMicrosoft()}>
               <MailPlus size={18} />
-              连接 Microsoft
+              添加 Microsoft
             </button>
-            <button onClick={() => connect("google")}>
+            <button onClick={() => connectOAuth("google")}>
               <MailPlus size={18} />
               连接 Gmail
             </button>
@@ -80,7 +131,8 @@ export function MailboxesPage() {
           <div>
             <strong>Microsoft 委托权限</strong>
             <span>
-              openid、profile、offline_access、User.Read、Mail.ReadWrite、Mail.Send
+              OAuth 登录（推荐）或 Client ID + Refresh Token；均验证
+              User.Read、Mail.ReadWrite、Mail.Send
             </span>
           </div>
         </div>
@@ -132,6 +184,22 @@ export function MailboxesPage() {
                             : "未知"}
                   </dd>
                 </div>
+                {m.provider === "MICROSOFT" && (
+                  <div>
+                    <dt>授权方式</dt>
+                    <dd>
+                      {m.microsoftAuthMode === "CLIENT_ID_REFRESH_TOKEN"
+                        ? "Client ID + Refresh Token"
+                        : "OAuth 登录（推荐）"}
+                    </dd>
+                  </div>
+                )}
+                {m.provider === "MICROSOFT" && m.microsoftClientId && (
+                  <div>
+                    <dt>独立 Client ID</dt>
+                    <dd className="break-value">{m.microsoftClientId}</dd>
+                  </div>
+                )}
                 <div>
                   <dt>最后刷新</dt>
                   <dd>{fmtDate(m.lastTokenRefreshAt)}</dd>
@@ -168,7 +236,9 @@ export function MailboxesPage() {
                 {m.status === "AUTH_REQUIRED" && (
                   <button
                     onClick={() =>
-                      connect(m.provider === "GOOGLE" ? "google" : "microsoft")
+                      m.provider === "GOOGLE"
+                        ? connectOAuth("google")
+                        : openMicrosoft(m)
                     }
                   >
                     <RefreshCw />
@@ -205,17 +275,125 @@ export function MailboxesPage() {
             <MailPlus size={38} />
             <h3>还没有连接邮箱</h3>
             <p>
-              先在系统设置中填写对应提供商的 Client ID 和 Client Secret，再连接
-              Microsoft 或 Gmail 账户。
+              Microsoft OAuth 登录需要先在系统设置中配置 Client ID 和 Client
+              Secret；Refresh Token 导入可直接使用对应的 Client ID。Gmail
+              仍需先配置 Google OAuth。
             </p>
             <div className="provider-connect-actions">
-              <button className="primary" onClick={() => connect("microsoft")}>
-                连接 Microsoft
+              <button className="primary" onClick={() => openMicrosoft()}>
+                添加 Microsoft
               </button>
-              <button onClick={() => connect("google")}>连接 Gmail</button>
+              <button onClick={() => connectOAuth("google")}>连接 Gmail</button>
             </div>
           </Empty>
         </Card>
+      )}
+      {microsoftDialog && (
+        <Modal title="添加 Microsoft 邮箱" wide onClose={closeMicrosoft}>
+          <div className="auth-method-grid">
+            <section className="auth-method-card recommended">
+              <div className="auth-method-heading">
+                <div className="auth-method-icon">
+                  <LogIn />
+                </div>
+                <div>
+                  <h3>OAuth 网页登录</h3>
+                  <span className="recommended-badge">
+                    <BadgeCheck /> 推荐
+                  </span>
+                </div>
+              </div>
+              <p>
+                跳转到 Microsoft 官方登录页选择账号。授权成功后，系统会自动读取
+                /me、创建或更新邮箱，并加密保存 MSAL Token Cache。
+              </p>
+              <ul>
+                <li>不接触或保存 Microsoft 邮箱密码</li>
+                <li>自动续期，可读取收件箱、垃圾箱并发送普通 Reply</li>
+                <li>需要先在系统设置中配置 Microsoft Client ID 和 Secret</li>
+              </ul>
+              <button
+                className="primary auth-method-submit"
+                disabled={importing}
+                onClick={() => {
+                  closeMicrosoft();
+                  void connectOAuth("microsoft");
+                }}
+              >
+                <LogIn />
+                使用 OAuth 登录
+              </button>
+            </section>
+
+            <form
+              className="auth-method-card"
+              onSubmit={importMicrosoftRefreshToken}
+            >
+              <div className="auth-method-heading">
+                <div className="auth-method-icon secondary">
+                  <FileKey2 />
+                </div>
+                <div>
+                  <h3>Client ID + Refresh Token</h3>
+                  <span className="method-label">高级导入</span>
+                </div>
+              </div>
+              <p>
+                系统先在 Microsoft 官方 Token Endpoint 换取 Access
+                Token，校验委托权限并读取 /me；全部成功后才保存邮箱。
+              </p>
+              <label>
+                Client ID
+                <input
+                  required
+                  value={refreshImport.clientId}
+                  onChange={(event) =>
+                    setRefreshImport({
+                      ...refreshImport,
+                      clientId: event.target.value,
+                    })
+                  }
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <label>
+                Refresh Token
+                <textarea
+                  required
+                  rows={6}
+                  value={refreshImport.refreshToken}
+                  onChange={(event) =>
+                    setRefreshImport({
+                      ...refreshImport,
+                      refreshToken: event.target.value,
+                    })
+                  }
+                  placeholder="粘贴与上方 Client ID 匹配的 Refresh Token"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <small>
+                  必须包含 User.Read、Mail.ReadWrite、Mail.Send；若该应用要求
+                  Client Secret，则不能使用这种仅两项导入方式。
+                </small>
+              </label>
+              <button
+                className="auth-method-submit"
+                type="submit"
+                disabled={importing}
+              >
+                <KeyRound />
+                {importing ? "正在验证并导入…" : "验证并导入"}
+              </button>
+            </form>
+          </div>
+          <Notice>
+            Refresh Token
+            会使用实例主密钥加密保存，后台不会再次显示原文，也不会写入系统日志或审计日志。
+          </Notice>
+        </Modal>
       )}
     </>
   );

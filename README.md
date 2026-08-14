@@ -1,6 +1,6 @@
 # MailPilot — Microsoft 与 Gmail 邮箱自动回复系统
 
-当前版本：**v0.02**
+当前版本：**v0.03**
 
 [![CI](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml)
 
@@ -8,12 +8,12 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 
 系统不使用 IMAP/SMTP，不保存邮箱密码。收件、发件和 OAuth 都通过 HTTPS 访问 Microsoft 或 Google 官方 API，因此服务器无需开放 993、465 或 587 端口。
 
-> v0.02 已完成代码级、类型、构建、自动化测试和本地 UI 冒烟测试。正式投入使用前，仍应使用你自己的 Microsoft/Google Client ID、Client Secret、测试邮箱和 Debian 服务器完成本文末尾的真实环境验收。
+> v0.03 已完成代码级、类型、构建、自动化测试和本地 UI 冒烟测试。正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据、测试邮箱和 Debian 服务器完成本文末尾的真实环境验收。
 
 ## 目录
 
 - [主要功能](#主要功能)
-- [v0.02 支持范围](#v002-支持范围)
+- [v0.03 支持范围](#v003-支持范围)
 - [系统架构](#系统架构)
 - [网络与服务器要求](#网络与服务器要求)
 - [Debian 一键安装](#debian-一键安装)
@@ -43,8 +43,8 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - 支持合计 1–10 个 Microsoft 与 Google 邮箱。
 - Microsoft 支持 Outlook/Hotmail 个人邮箱和全球版 Microsoft 365 用户邮箱。
 - Google 支持 Gmail 个人邮箱和 Google Workspace 用户邮箱。
-- 每个邮箱通过 OAuth 2.0 Authorization Code + PKCE 授权一次。
-- 使用加密的 MSAL Token Cache 或 Google Refresh Token 自动刷新授权，不保存邮箱登录密码。
+- Microsoft 邮箱支持 OAuth 2.0 Authorization Code + PKCE 网页登录（推荐），也支持 Client ID + Refresh Token 高级导入。
+- 使用加密的 MSAL Token Cache、Microsoft Refresh Token Cache 或 Google Refresh Token 自动续期，不保存邮箱登录密码。
 - Microsoft 分别检测 inbox 与 junkemail；Gmail 分别识别 INBOX 与 SPAM。
 - 检测周期最低可设置为 3 秒；这是尽力而为周期，不是硬实时承诺。
 - 每封合格新邮件最多回复一次；同一会话后续新邮件仍可分别回复。
@@ -61,7 +61,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - 支持 Argon2id + XChaCha20-Poly1305 加密备份与跨服务器恢复。
 - 提供 Debian 安装脚本、改密 CLI、健康检查和升级回滚脚本。
 
-## v0.02 支持范围
+## v0.03 支持范围
 
 支持：
 
@@ -90,7 +90,7 @@ flowchart LR
     A --> R[(Redis 7)]
     W[worker: Delta / History / 规则 / 发送 / 核验] --> PG
     W --> R
-    A -->|OAuth / Graph HTTPS| M[Microsoft Graph]
+    A -->|OAuth 或 Refresh Token / Graph HTTPS| M[Microsoft Graph]
     W -->|收件检测与回复 HTTPS| M
     A -->|OAuth HTTPS| G[Google OAuth]
     W -->|History / Gmail API HTTPS| GA[Gmail API]
@@ -169,7 +169,7 @@ sudo ./install.sh
 
 安装时会询问：
 
-- **HTTPS 公开地址**：例如 https://mail.example.com。可以暂时留空，但留空时不能连接 Microsoft 或 Gmail。
+- **HTTPS 公开地址**：例如 https://mail.example.com。可以暂时留空；留空时不能使用 Microsoft/Gmail OAuth 网页登录，但仍可通过 Client ID + Refresh Token 导入 Microsoft 邮箱。
 - **本机监听端口**：默认 8080。
 - **管理员用户名**：直接回车会随机生成。
 - **管理员密码**：直接回车会随机生成；手工输入至少 12 位。
@@ -293,7 +293,9 @@ https://mail.example.com
 
 ## 注册 Microsoft Entra 应用
 
-只需要创建一套 Microsoft 应用，之后可用它连接 1–10 个邮箱。
+本节用于推荐的 **OAuth 网页登录** 方式。只需要创建一套 Microsoft Web 应用，之后可用它连接 1–10 个邮箱。
+
+如果已经持有与某个 Microsoft 公共客户端匹配的 Client ID 和 Refresh Token，也可以跳到“连接邮箱”章节使用高级导入，不必把这套 Client ID/Secret 保存为系统级 OAuth 配置。
 
 ### 1. 新建应用注册
 
@@ -398,7 +400,7 @@ MailPilot 使用的是 **Delegated permissions**，不是 Application permission
 
 保存后 Client Secret 不会再次显示原文，只能替换。
 
-修改 Client ID 会使已有邮箱进入需要重新授权状态。仅替换同一应用的 Client Secret 时，系统会先尝试静默刷新。
+修改这里的 Client ID 只会使使用 **OAuth 网页登录** 的 Microsoft 邮箱进入需要重新授权状态；使用独立 Client ID + Refresh Token 导入的邮箱不受影响。仅替换同一应用的 Client Secret 时，系统会先尝试静默刷新 OAuth 邮箱。
 
 ## 注册 Google Cloud Gmail 应用
 
@@ -517,13 +519,21 @@ docker compose logs app
 
 ## 连接邮箱
 
-确保已配置 HTTPS 公开地址，以及对应提供商的 Client ID 和 Client Secret。
+Gmail 和 Microsoft OAuth 网页登录需要先配置 HTTPS 公开地址及对应的 Client ID/Secret。Microsoft Client ID + Refresh Token 导入不依赖回调地址，也不使用系统级 Microsoft Client Secret。
 
 ### 连接 Microsoft 邮箱
 
 进入：
 
-**邮箱账号 → 连接 Microsoft**
+**邮箱账号 → 添加 Microsoft**
+
+后台会显示两种方式。
+
+#### 方法一：OAuth 网页登录（推荐）
+
+选择：
+
+**OAuth 网页登录 → 使用 OAuth 登录**
 
 随后：
 
@@ -531,11 +541,48 @@ docker compose logs app
 2. 登录要连接的 Outlook、Hotmail 或 Microsoft 365 邮箱。
 3. 同意所需权限。
 4. Microsoft 回调到 MailPilot。
-5. 邮箱状态显示为“已连接”。
+5. MailPilot 读取 `/me`，验证 inbox 与 junkemail 可读，加密保存 MSAL Token Cache，并自动创建或更新邮箱。
+6. 邮箱状态显示为“已连接”。
 
 每个邮箱都需要单独执行一次授权。
 
-同一个邮箱地址只能绑定一个提供商，避免混合授权缓存、会话游标和历史去重记录。若组织正在做 Microsoft/Google 混合迁移，请先确定该地址当前实际承载邮件的平台。
+#### 方法二：Client ID + Refresh Token 导入
+
+选择：
+
+**Client ID + Refresh Token → 高级导入**
+
+对应后台接口：
+
+```text
+POST /api/v1/microsoft/import-refresh-token
+```
+
+填写：
+
+- **Client ID**：签发该 Refresh Token 的 Microsoft Application (client) ID。
+- **Refresh Token**：该应用通过合法委托授权流程取得的 Refresh Token。
+
+点击“验证并导入”后，系统按以下顺序处理：
+
+1. 仅向 `https://login.microsoftonline.com/common/oauth2/v2.0/token` 提交 Client ID 和 Refresh Token。
+2. 换取短期 Access Token；Microsoft 返回轮换后的 Refresh Token 时，以新 Token 替换旧 Token。
+3. 验证授权至少包含 `User.Read`、`Mail.ReadWrite`、`Mail.Send`。
+4. 调用 Microsoft Graph `/me` 识别邮箱，并验证 inbox 与 junkemail 可以读取。
+5. 全部成功后才创建或更新邮箱；Refresh Token 和 Access Token 使用实例主密钥加密保存。
+
+导入接口不会把 Refresh Token 回显给浏览器，不会写入处理日志、系统日志或审计日志。Client ID 不是秘密，可在邮箱卡片中显示用于识别授权来源。
+
+注意：
+
+- Refresh Token 必须与 Client ID 完全匹配，且必须来自该账户的 **Delegated permissions** 授权。
+- 这种导入只提交 Client ID 和 Refresh Token。因此，签发 Token 的应用必须允许公共客户端刷新；如果该应用属于必须提交 Client Secret 的 confidential client，Microsoft 会返回 `invalid_client`，应改用推荐的 OAuth 网页登录方式。
+- 不要从不可信第三方购买、复制或共享 Refresh Token。Refresh Token 等同于长期邮箱授权，泄露后应立即在 Microsoft 账户或 Entra 中撤销应用许可。
+- 系统不能在不实际发信的情况下无副作用验证 `Mail.Send`，因此导入阶段验证令牌的 `Mail.Send` 委托权限；上线前仍应使用“模板测试发送”完成真实发件验收。
+
+两种方法都不保存 Microsoft 邮箱密码，并且后续读取和发送统一通过 Microsoft Graph。手工导入邮箱不依赖“系统设置 → Microsoft”中的 Client Secret；更换系统级 Client ID 也不会暂停它。
+
+同一个邮箱地址同一时间只能绑定一个活动提供商，避免混合授权缓存、会话游标和历史去重记录。若已执行“移除邮箱”，之后可以把同一地址重新连接到另一个提供商；系统会使用全新游标基线，不补回复移除期间的旧任务邮件。
 
 ### 连接 Gmail 邮箱
 
@@ -568,9 +615,9 @@ docker compose logs app
 
 如果出现“需要授权”：
 
-- 检查 Client Secret 是否过期。
-- 检查企业租户是否要求管理员同意。
-- 点击重新连接并完成授权。
+- OAuth Microsoft 邮箱：检查 Client Secret、管理员同意和应用配置，然后重新登录。
+- Client ID + Refresh Token Microsoft 邮箱：重新导入与原 Client ID 匹配的新 Refresh Token，也可以切换为 OAuth 登录。
+- Gmail 邮箱：检查 Google OAuth 配置、应用发布状态和 Refresh Token 状态，然后重新连接。
 
 移除邮箱只删除本地 Token Cache、Refresh Token、游标和邮箱配置。若要彻底撤销权限：
 
@@ -962,7 +1009,7 @@ docker compose exec app autoreply admin reset-password --disable-totp
 备份包含：
 
 - Microsoft 与 Google OAuth 应用配置。
-- 可迁移的 Microsoft MSAL Token Cache 与 Google OAuth Token Cache。
+- 可迁移的 Microsoft MSAL Token Cache、Microsoft Client ID + Refresh Token 加密缓存与 Google OAuth Token Cache。
 - 邮箱、任务、游标和规则。
 - 模板、模板版本和附件。
 - 系统设置和 Webhook。
@@ -1157,7 +1204,18 @@ Secret 过期后：
 3. 系统先尝试静默刷新。
 4. 刷新失败的邮箱需要重新连接。
 
-### 5. 邮件没有立即回复
+### 5. Client ID + Refresh Token 导入失败
+
+按后台错误提示检查：
+
+- `MICROSOFT_REFRESH_TOKEN_INVALID`：Token 已过期或撤销、Client ID 不匹配，或者该应用刷新时必须提交 Client Secret。重新取得匹配的 Refresh Token，或改用 OAuth 网页登录。
+- `MICROSOFT_SCOPES_MISSING`：原授权缺少 `User.Read`、`Mail.ReadWrite` 或 `Mail.Send`，必须按完整委托权限重新授权后生成 Refresh Token。
+- `MICROSOFT_MAILBOX_ACCESS_FAILED`：账号可能没有 Exchange Online/Outlook 邮箱、邮箱尚未开通，或 Graph 邮件权限尚未生效。
+- `MICROSOFT_TOKEN_RATE_LIMITED`：Microsoft Token Endpoint 暂时限流，按提示稍后重试。
+
+不要把 Refresh Token 放进命令行历史、工单截图或聊天记录。若怀疑泄露，应先到 Microsoft/Entra 撤销应用授权，再生成新 Token。
+
+### 6. 邮件没有立即回复
 
 检查：
 
@@ -1180,7 +1238,7 @@ docker compose exec app autoreply doctor
 
 后台处理日志会记录明确跳过原因。
 
-### 6. 垃圾箱邮件没有检测
+### 7. 垃圾箱邮件没有检测
 
 确认：
 
@@ -1189,7 +1247,7 @@ docker compose exec app autoreply doctor
 - 邮件 receivedDateTime 不早于任务启用时间。
 - 邮件不是后来移入垃圾箱的启用前历史邮件。
 
-### 7. 出现 Microsoft Graph 或 Gmail API 429
+### 8. 出现 Microsoft Graph 或 Gmail API 429
 
 这是邮件提供商限流或 Google 配额限制。系统会遵守 Retry-After 并退避，不应通过无限增加 Worker 绕过限制。
 
@@ -1199,7 +1257,7 @@ docker compose exec app autoreply doctor
 - 降低每邮箱积压发送速率。
 - 避免同时恢复大量邮箱任务。
 
-### 8. Gmail 每隔 7 天要求重新授权
+### 9. Gmail 每隔 7 天要求重新授权
 
 最常见原因是 Google OAuth 应用仍处于 **Testing** 状态。对于 External 应用和 Gmail 受限权限，测试用户刷新令牌通常在 7 天后失效。
 
@@ -1210,7 +1268,7 @@ docker compose exec app autoreply doctor
 - 外部长期使用时按 Google 要求发布到 Production，并完成可能要求的验证。
 - 完成设置后在 MailPilot 点击 Gmail“重新授权”。
 
-### 9. 状态为 UNCERTAIN
+### 10. 状态为 UNCERTAIN
 
 系统无法确认提供商是否已经接受发送。请先登录对应 Microsoft 或 Gmail 邮箱检查：
 
@@ -1220,13 +1278,13 @@ docker compose exec app autoreply doctor
 
 不要直接强制重发，否则可能造成重复回复。
 
-### 10. 忘记后台密码
+### 11. 忘记后台密码
 
 ```bash
 docker compose exec app autoreply admin reset-password --random
 ```
 
-### 11. health/live 正常但 health/ready 失败
+### 12. health/live 正常但 health/ready 失败
 
 health/live 只表示 app 进程存活。health/ready 还会检查 PostgreSQL、Redis 和 Worker 心跳。
 
@@ -1235,7 +1293,7 @@ docker compose ps
 docker compose logs --tail=200 postgres redis app worker
 ```
 
-### 12. 8080 端口被占用
+### 13. 8080 端口被占用
 
 修改 .env 中 HOST_PORT，例如：
 
@@ -1251,7 +1309,7 @@ docker compose up -d
 
 同时修改 Nginx proxy_pass 指向新的本地端口。
 
-### 13. 备份口令忘记
+### 14. 备份口令忘记
 
 无法恢复。备份加密没有后门。请妥善保管口令，并与备份文件分开保存。
 
@@ -1324,11 +1382,12 @@ http://127.0.0.1:4174
 
 仓库内置 GitHub Actions，会在 Linux/Node.js 22 上重复静态检查，并构建、启动完整 Docker Compose 栈，验证迁移、关键数据库索引、PostgreSQL、Redis、app、worker、健康接口、维护任务和运维 CLI。
 
-当前包含 23 个后端测试文件、71 项自动化测试，覆盖：
+当前包含 23 个后端测试文件、89 项自动化测试，覆盖：
 
 - Graph Token 临时故障和授权失效区分。
+- Microsoft Client ID + Refresh Token 导入、权限校验、Token 轮换、撤销授权、401 强制刷新、并发凭据替换保护和无关 403 隔离。
 - 更换 Microsoft Client ID 时配置、停用与队列清理的事务一致性。
-- Google PKCE OAuth、Refresh Token 刷新、撤销授权和提供商绑定状态。
+- Google PKCE OAuth、Refresh Token 刷新、撤销授权、提供商绑定状态和已移除邮箱的跨提供商重连。
 - Gmail History 基线、SPAM 映射、MIME 草稿、附件与无盲重试发送。
 - v0.01 备份向后兼容和 Gmail 游标关联完整性。
 - MIME 循环抑制、追踪头和非 ASCII Subject 编码。
@@ -1337,7 +1396,7 @@ http://127.0.0.1:4174
 - 安全过滤和规则匹配。
 - From/Reply-To 分离和 Microsoft 服务邮件防绕过。
 - HTML 清洗、Liquid 转义和外部文件引用禁用。
-- 模板渲染失败、附件上传中断和发送核验恢复。
+- 模板渲染失败、附件上传中断、授权中断和发送核验恢复。
 - 核验任务写入失败后，中断邮件无需重启 Worker 即可恢复。
 - Delta 普通与恢复扫描恰好 200 页的分页边界。
 - Delta 分页中断时只使用最后完整游标回退，避免漏掉更早邮件。
@@ -1358,7 +1417,7 @@ http://127.0.0.1:4174
 包括：
 
 - auth：登录、注销、改密、TOTP 和主题。
-- microsoft：Client 配置和 OAuth。
+- microsoft：系统级 Client 配置、OAuth 网页登录和 Client ID + Refresh Token 导入。
 - google：Google Cloud Client 配置和 Gmail OAuth。
 - mailboxes：邮箱连接状态和移除。
 - tasks：任务、暂停、恢复和规则。
@@ -1401,6 +1460,15 @@ API 使用统一请求 ID、错误码和脱敏错误结构。
 - Token 静默刷新。
 - Secret 轮换。
 - 撤销授权后重新连接。
+
+### Microsoft Client ID + Refresh Token
+
+- 个人 Outlook 与 Microsoft 365 委托 Refresh Token。
+- 缺少 User.Read、Mail.ReadWrite 或 Mail.Send 时拒绝导入。
+- Client ID 不匹配、Token 撤销和必须提交 Client Secret 的应用。
+- Refresh Token 轮换后加密缓存原子更新。
+- 系统级 Microsoft Client ID/Secret 变更不影响手工导入邮箱。
+- 导入后 inbox/junkemail 实际读取与模板测试发送。
 
 ### Google OAuth 与 Gmail
 

@@ -11,6 +11,55 @@ import { AlertService } from "../observability/alert.service.js";
 import { ProviderApiError } from "../providers/provider-api.error.js";
 
 export const GRAPH_SCOPES = ["User.Read", "Mail.ReadWrite", "Mail.Send"];
+const MICROSOFT_TOKEN_URL =
+  "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+const REFRESH_TOKEN_SCOPES = ["offline_access", ...GRAPH_SCOPES];
+
+export type MicrosoftRefreshTokenCache = {
+  version: 1;
+  accessToken?: string;
+  refreshToken: string;
+  expiresAt?: number;
+  scope: string;
+  tokenType?: string;
+};
+
+type MicrosoftTokenResponse = {
+  token_type?: string;
+  scope?: string;
+  expires_in?: number;
+  ext_expires_in?: number;
+  access_token?: string;
+  refresh_token?: string;
+  error?: string;
+  error_description?: string;
+};
+
+type MicrosoftMailboxTokenRecord = {
+  id: string;
+  provider: "MICROSOFT" | "GOOGLE";
+  status: "CONNECTED" | "AUTH_REQUIRED" | "DISABLED" | "REMOVED";
+  microsoftAuthMode: "MSAL_OAUTH" | "CLIENT_ID_REFRESH_TOKEN";
+  microsoftClientId: string | null;
+  homeAccountId: string;
+  tokenCacheEncrypted: string;
+};
+
+type MicrosoftCredentialSnapshot = Pick<
+  MicrosoftMailboxTokenRecord,
+  | "id"
+  | "provider"
+  | "status"
+  | "microsoftAuthMode"
+  | "microsoftClientId"
+  | "homeAccountId"
+  | "tokenCacheEncrypted"
+>;
+
+type MicrosoftAccessTokenContext = {
+  accessToken: string;
+  credential: MicrosoftCredentialSnapshot;
+};
 
 export class GraphError extends ProviderApiError {
   constructor(
@@ -34,6 +83,13 @@ export class GraphService {
   ) {}
 
   async accessToken(mailboxId: string, forceRefresh = false): Promise<string> {
+    return (await this.accessTokenContext(mailboxId, forceRefresh)).accessToken;
+  }
+
+  private async accessTokenContext(
+    mailboxId: string,
+    forceRefresh = false,
+  ): Promise<MicrosoftAccessTokenContext> {
     const mailbox = await this.prisma.mailbox.findUnique({
       where: { id: mailboxId },
     });
@@ -50,88 +106,226 @@ export class GraphService {
         "该邮箱不是 Microsoft 邮箱",
         409,
       );
-    const app = await this.prisma.microsoftAppConfig.findUnique({
-      where: { id: "singleton" },
-    });
-    if (!app)
-      throw new AppError(
-        "MICROSOFT_NOT_CONFIGURED",
-        "请先配置 Microsoft Client ID 和 Client Secret",
-        409,
-      );
+    return mailbox.microsoftAuthMode === "CLIENT_ID_REFRESH_TOKEN"
+      ? this.refreshTokenAccessToken(mailbox, forceRefresh)
+      : this.msalAccessToken(mailbox, forceRefresh);
+  }
 
-    const cca = await this.createClient(
-      app.clientId,
-      app.clientSecretEncrypted,
+  async exchangeImportedRefreshToken(
+    clientId: string,
+    refreshToken: string,
+  ): Promise<MicrosoftRefreshTokenCache> {
+    const response = await this.requestRefreshToken(
+      clientId.trim(),
+      refreshToken.trim(),
     );
-    const cache = cca.getTokenCache();
-    const serialized = await this.crypto.decryptString(
-      mailbox.tokenCacheEncrypted,
-      `msal:${mailbox.id}`,
-    );
-    cache.deserialize(serialized);
-    const account = await cache.getAccountByHomeId(mailbox.homeAccountId);
-    if (!account) {
-      await this.requireAuthorization(
-        mailbox.id,
-        "MSAL_ACCOUNT_MISSING",
-        "授权缓存中找不到邮箱账户",
+    if (!response.access_token)
+      throw new GraphError(
+        502,
+        "MICROSOFT_TOKEN_EMPTY",
+        "Microsoft 刷新令牌响应缺少 access_token",
       );
-      throw new AppError("MAILBOX_AUTH_REQUIRED", "邮箱需要重新授权", 409);
-    }
+    const cache = this.refreshTokenCache(
+      response,
+      response.refresh_token || refreshToken.trim(),
+    );
+    this.assertRequiredScopes(cache.scope);
+    return cache;
+  }
 
+  tokenIdentity(accessToken: string): {
+    tenantId?: string;
+    objectId?: string;
+  } {
+    const claims = this.jwtClaims(accessToken);
+    return {
+      tenantId: typeof claims?.tid === "string" ? claims.tid : undefined,
+      objectId:
+        typeof claims?.oid === "string"
+          ? claims.oid
+          : typeof claims?.sub === "string"
+            ? claims.sub
+            : undefined,
+    };
+  }
+
+  private async msalAccessToken(
+    mailbox: MicrosoftMailboxTokenRecord,
+    forceRefresh: boolean,
+  ): Promise<MicrosoftAccessTokenContext> {
     try {
+      const app = await this.prisma.microsoftAppConfig.findUnique({
+        where: { id: "singleton" },
+      });
+      if (!app)
+        throw new AppError(
+          "MICROSOFT_NOT_CONFIGURED",
+          "请先配置 Microsoft Client ID 和 Client Secret",
+          409,
+        );
+      const cca = await this.createClient(
+        app.clientId,
+        app.clientSecretEncrypted,
+      );
+      const cache = cca.getTokenCache();
+      let serializedCache: string;
+      try {
+        serializedCache = await this.crypto.decryptString(
+          mailbox.tokenCacheEncrypted,
+          `msal:${mailbox.id}`,
+        );
+        cache.deserialize(serializedCache);
+      } catch {
+        throw new AppError(
+          "MSAL_TOKEN_CACHE_INVALID",
+          "Microsoft OAuth 授权缓存无法读取",
+          409,
+        );
+      }
+      const account = await cache.getAccountByHomeId(mailbox.homeAccountId);
+      if (!account)
+        throw new AppError(
+          "MSAL_ACCOUNT_MISSING",
+          "授权缓存中找不到邮箱账户",
+          409,
+        );
       const result = await cca.acquireTokenSilent({
         account,
         scopes: GRAPH_SCOPES,
         forceRefresh,
       });
-      const updatedCache = cache.serialize();
+      if (!result?.accessToken)
+        throw new GraphError(
+          502,
+          "MSAL_TOKEN_EMPTY",
+          "Microsoft 未返回有效访问令牌",
+        );
+      const updatedSerializedCache = cache.serialize();
+      if (updatedSerializedCache === serializedCache)
+        return {
+          accessToken: result.accessToken,
+          credential: this.credentialSnapshot(mailbox),
+        };
       const encryptedCache = await this.crypto.encryptString(
-        updatedCache,
+        updatedSerializedCache,
         `msal:${mailbox.id}`,
       );
-      const persisted = await this.prisma.mailbox.updateMany({
-        where: {
-          id: mailbox.id,
-          status: "CONNECTED",
-          tokenCacheEncrypted: mailbox.tokenCacheEncrypted,
-        },
-        data: {
-          tokenCacheEncrypted: encryptedCache,
-          lastTokenRefreshAt: new Date(),
-          lastErrorCode: null,
-          lastErrorMessage: null,
-        },
-      });
-      if (!persisted.count) {
-        // Polling and sending can acquire a token at the same time. Never
-        // overwrite a newer cache written by the other process; only refresh
-        // non-sensitive status metadata when the mailbox is still connected.
-        await this.prisma.mailbox.updateMany({
-          where: { id: mailbox.id, status: "CONNECTED" },
-          data: {
-            lastTokenRefreshAt: new Date(),
-            lastErrorCode: null,
-            lastErrorMessage: null,
-          },
-        });
-      }
-      return result.accessToken;
+      const persisted = await this.persistTokenCache(mailbox, encryptedCache);
+      if (!persisted) return this.accessTokenContext(mailbox.id, false);
+      return {
+        accessToken: result.accessToken,
+        credential: this.credentialSnapshot(mailbox, encryptedCache),
+      };
     } catch (error) {
-      const code = this.errorCode(error);
-      const message =
-        error instanceof Error ? error.message : "Token refresh failed";
-      if (this.isAuthorizationFailure(error)) {
-        await this.requireAuthorization(mailbox.id, code, message);
+      return this.handleTokenFailure(
+        mailbox,
+        error,
+        "MSAL token refresh failed",
+      );
+    }
+  }
+
+  private async refreshTokenAccessToken(
+    mailbox: MicrosoftMailboxTokenRecord,
+    forceRefresh: boolean,
+  ): Promise<MicrosoftAccessTokenContext> {
+    try {
+      if (!mailbox.microsoftClientId)
         throw new AppError(
-          "MAILBOX_AUTH_REQUIRED",
-          "Microsoft 授权已失效，请重新连接邮箱",
+          "MICROSOFT_CLIENT_ID_MISSING",
+          "该邮箱的 Client ID 缺失",
           409,
         );
-      }
-      throw new GraphError(0, code, message);
+      const cached = await this.readRefreshTokenCache(mailbox);
+      if (
+        !forceRefresh &&
+        cached.accessToken &&
+        (cached.expiresAt ?? 0) > Date.now() + 60_000
+      )
+        return {
+          accessToken: cached.accessToken,
+          credential: this.credentialSnapshot(mailbox),
+        };
+      const response = await this.requestRefreshToken(
+        mailbox.microsoftClientId,
+        cached.refreshToken,
+      );
+      if (!response.access_token)
+        throw new GraphError(
+          502,
+          "MICROSOFT_TOKEN_EMPTY",
+          "Microsoft 刷新令牌响应缺少 access_token",
+        );
+      const updated = this.refreshTokenCache(
+        response,
+        response.refresh_token || cached.refreshToken,
+        cached,
+      );
+      this.assertRequiredScopes(updated.scope);
+      const encryptedCache = await this.crypto.encryptString(
+        JSON.stringify(updated),
+        `msal:${mailbox.id}`,
+      );
+      const persisted = await this.persistTokenCache(mailbox, encryptedCache);
+      if (!persisted) return this.accessTokenContext(mailbox.id, false);
+      return {
+        accessToken: updated.accessToken!,
+        credential: this.credentialSnapshot(mailbox, encryptedCache),
+      };
+    } catch (error) {
+      return this.handleTokenFailure(
+        mailbox,
+        error,
+        "Microsoft refresh token exchange failed",
+      );
     }
+  }
+
+  private async persistTokenCache(
+    mailbox: MicrosoftMailboxTokenRecord,
+    encryptedCache: string,
+  ): Promise<boolean> {
+    const persisted = await this.prisma.mailbox.updateMany({
+      where: {
+        id: mailbox.id,
+        provider: "MICROSOFT",
+        microsoftAuthMode: mailbox.microsoftAuthMode,
+        status: "CONNECTED",
+        tokenCacheEncrypted: mailbox.tokenCacheEncrypted,
+      },
+      data: {
+        tokenCacheEncrypted: encryptedCache,
+        lastTokenRefreshAt: new Date(),
+        lastErrorCode: null,
+        lastErrorMessage: null,
+      },
+    });
+    return Boolean(persisted.count);
+  }
+
+  private async handleTokenFailure(
+    mailbox: MicrosoftMailboxTokenRecord,
+    error: unknown,
+    fallbackMessage: string,
+  ): Promise<MicrosoftAccessTokenContext> {
+    const code = this.errorCode(error);
+    const message = error instanceof Error ? error.message : fallbackMessage;
+    if (this.isAuthorizationFailure(error)) {
+      const marked = await this.requireAuthorization(
+        mailbox.id,
+        code,
+        message,
+        this.credentialSnapshot(mailbox),
+      );
+      if (!marked) return this.accessTokenContext(mailbox.id, false);
+      throw new AppError(
+        "MAILBOX_AUTH_REQUIRED",
+        "Microsoft 授权已失效，请重新登录或重新导入 Refresh Token",
+        409,
+      );
+    }
+    if (error instanceof AppError || error instanceof GraphError) throw error;
+    throw new GraphError(0, code, message);
   }
 
   async request<T>(
@@ -143,9 +337,17 @@ export class GraphService {
     const maxRetries = options.maxRetries ?? 3;
     const expected = options.expected ?? [200];
     let attempt = 0;
+    let refreshedAfterUnauthorized = false;
+    let retriedAfterCredentialChange = false;
+    let forceRefresh = false;
     while (true) {
       const url = this.graphUrl(pathOrUrl);
-      const token = await this.accessToken(mailboxId);
+      const tokenContext = await this.accessTokenContext(
+        mailboxId,
+        forceRefresh,
+      );
+      const token = tokenContext.accessToken;
+      forceRefresh = false;
       let response: Response;
       try {
         response = await fetch(url, {
@@ -186,6 +388,12 @@ export class GraphService {
       }
 
       const retryAfter = this.retryAfter(response);
+      if (response.status === 401 && !refreshedAfterUnauthorized) {
+        await response.arrayBuffer().catch(() => undefined);
+        refreshedAfterUnauthorized = true;
+        forceRefresh = true;
+        continue;
+      }
       if (
         (response.status === 429 || response.status >= 500) &&
         attempt++ < maxRetries
@@ -206,12 +414,19 @@ export class GraphService {
       const message =
         graphBody?.error?.message ??
         `Microsoft Graph request failed (${response.status})`;
-      if (
-        response.status === 401 ||
-        (response.status === 403 &&
-          /InvalidAuthenticationToken|ErrorAccessDenied/i.test(code))
-      ) {
-        await this.requireAuthorization(mailboxId, code, message);
+      if (this.isGraphAuthorizationFailure(response.status, code, message)) {
+        const marked = await this.requireAuthorization(
+          mailboxId,
+          code,
+          message,
+          tokenContext.credential,
+        );
+        if (!marked && !retriedAfterCredentialChange) {
+          retriedAfterCredentialChange = true;
+          refreshedAfterUnauthorized = false;
+          forceRefresh = false;
+          continue;
+        }
       }
       throw new GraphError(response.status, code, message, retryAfter, body);
     }
@@ -275,61 +490,286 @@ export class GraphService {
     mail?: string;
     userPrincipalName?: string;
   }> {
-    const response = await fetch(
-      "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName",
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: "application/json",
+    let response: Response;
+    try {
+      response = await fetch(
+        "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName",
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+          },
+          signal: AbortSignal.timeout(30_000),
         },
-        signal: AbortSignal.timeout(30_000),
-      },
-    );
+      );
+    } catch {
+      throw new AppError(
+        "MICROSOFT_PROFILE_FAILED",
+        "无法连接 Microsoft Graph 读取邮箱资料",
+        502,
+      );
+    }
     if (!response.ok)
       throw new AppError(
         "MICROSOFT_PROFILE_FAILED",
         "无法读取 Microsoft 邮箱资料",
         502,
       );
-    return response.json() as Promise<{
+    const profile = (await response.json().catch(() => undefined)) as
+      | {
+          id?: string;
+          displayName?: string;
+          mail?: string;
+          userPrincipalName?: string;
+        }
+      | undefined;
+    if (!profile?.id)
+      throw new AppError(
+        "MICROSOFT_PROFILE_INVALID",
+        "Microsoft 返回的邮箱资料无效",
+        502,
+      );
+    return profile as {
       id: string;
       displayName?: string;
       mail?: string;
       userPrincipalName?: string;
-    }>;
+    };
+  }
+
+  async validateMailboxReadAccess(accessToken: string): Promise<void> {
+    const folders = ["inbox", "junkemail"];
+    for (const folder of folders) {
+      let response: Response;
+      try {
+        response = await fetch(
+          `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}?$select=id`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "application/json",
+            },
+            signal: AbortSignal.timeout(30_000),
+          },
+        );
+      } catch {
+        throw new AppError(
+          "MICROSOFT_MAILBOX_ACCESS_FAILED",
+          "无法连接 Microsoft Graph 验证邮箱读取权限",
+          502,
+        );
+      }
+      if (!response.ok)
+        throw new AppError(
+          "MICROSOFT_MAILBOX_ACCESS_FAILED",
+          "该账户无法读取 Microsoft 收件箱或垃圾箱，请确认存在可用邮箱并已授予 Mail.ReadWrite",
+          response.status === 401 || response.status === 403 ? 409 : 502,
+        );
+    }
+  }
+
+  private async readRefreshTokenCache(
+    mailbox: MicrosoftMailboxTokenRecord,
+  ): Promise<MicrosoftRefreshTokenCache> {
+    try {
+      const plain = await this.crypto.decryptString(
+        mailbox.tokenCacheEncrypted,
+        `msal:${mailbox.id}`,
+      );
+      const parsed = JSON.parse(plain) as MicrosoftRefreshTokenCache;
+      if (
+        !parsed ||
+        parsed.version !== 1 ||
+        typeof parsed.refreshToken !== "string" ||
+        !parsed.refreshToken ||
+        typeof parsed.scope !== "string"
+      )
+        throw new Error("invalid Microsoft refresh token cache");
+      return parsed;
+    } catch {
+      throw new AppError(
+        "MICROSOFT_REFRESH_TOKEN_CACHE_INVALID",
+        "Microsoft Refresh Token 授权缓存无法读取",
+        409,
+      );
+    }
+  }
+
+  private refreshTokenCache(
+    response: MicrosoftTokenResponse,
+    refreshToken: string,
+    previous?: MicrosoftRefreshTokenCache,
+  ): MicrosoftRefreshTokenCache {
+    const expiresIn =
+      typeof response.expires_in === "number" &&
+      Number.isFinite(response.expires_in)
+        ? response.expires_in
+        : 3_600;
+    const scope =
+      response.scope?.trim() ||
+      this.accessTokenScope(response.access_token) ||
+      previous?.scope ||
+      "";
+    return {
+      version: 1,
+      accessToken: response.access_token,
+      refreshToken,
+      expiresAt: Date.now() + Math.max(60, expiresIn) * 1_000,
+      scope,
+      tokenType: response.token_type || previous?.tokenType || "Bearer",
+    };
+  }
+
+  private async requestRefreshToken(
+    clientId: string,
+    refreshToken: string,
+  ): Promise<MicrosoftTokenResponse> {
+    if (!clientId || !refreshToken)
+      throw new AppError(
+        "MICROSOFT_REFRESH_IMPORT_INVALID",
+        "Client ID 和 Refresh Token 不能为空",
+        400,
+      );
+    let attempt = 0;
+    while (true) {
+      let response: Response;
+      try {
+        response = await fetch(MICROSOFT_TOKEN_URL, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id: clientId,
+            refresh_token: refreshToken,
+            grant_type: "refresh_token",
+            scope: REFRESH_TOKEN_SCOPES.join(" "),
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (error) {
+        if (attempt++ < 2) {
+          await sleep(Math.min(8_000, 1_000 * 2 ** attempt));
+          continue;
+        }
+        throw new GraphError(
+          0,
+          "MICROSOFT_OAUTH_NETWORK_ERROR",
+          error instanceof Error
+            ? error.message
+            : "Microsoft OAuth network error",
+        );
+      }
+      const result = (await response
+        .json()
+        .catch(() => ({}))) as MicrosoftTokenResponse;
+      if (response.ok) return result;
+      const retryAfter = this.retryAfter(response);
+      if (
+        (response.status === 429 || response.status >= 500) &&
+        attempt++ < 2
+      ) {
+        await sleep((retryAfter ?? Math.min(8, 2 ** attempt)) * 1_000);
+        continue;
+      }
+      throw new GraphError(
+        response.status,
+        result.error || `HTTP_${response.status}`,
+        (result.error_description || "Microsoft OAuth token request failed")
+          .replace(/[\r\n]+/g, " ")
+          .slice(0, 1_000),
+        retryAfter,
+      );
+    }
+  }
+
+  private assertRequiredScopes(scope: string): void {
+    const granted = new Set(
+      scope
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((item) => item.toLowerCase()),
+    );
+    const missing = GRAPH_SCOPES.filter(
+      (item) => !granted.has(item.toLowerCase()),
+    );
+    if (missing.length)
+      throw new AppError(
+        "MICROSOFT_SCOPES_MISSING",
+        "Refresh Token 未授予完整的 Microsoft 邮件读取和发送权限",
+        409,
+        { missing },
+      );
+  }
+
+  private accessTokenScope(accessToken?: string): string {
+    const claims = accessToken ? this.jwtClaims(accessToken) : undefined;
+    return typeof claims?.scp === "string" ? claims.scp : "";
+  }
+
+  private jwtClaims(token: string): Record<string, unknown> | undefined {
+    const payload = token.split(".")[1];
+    if (!payload) return undefined;
+    try {
+      const parsed = JSON.parse(
+        Buffer.from(payload, "base64url").toString("utf8"),
+      ) as unknown;
+      return parsed && typeof parsed === "object"
+        ? (parsed as Record<string, unknown>)
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   async requireAuthorization(
     mailboxId: string,
     code: string,
     message: string,
-  ): Promise<void> {
-    await this.prisma.mailbox
-      .update({
-        where: { id: mailboxId },
+    expected?: MicrosoftCredentialSnapshot,
+  ): Promise<boolean> {
+    const credential =
+      expected ??
+      (await this.prisma.mailbox.findUnique({ where: { id: mailboxId } }));
+    if (
+      !credential ||
+      credential.provider !== "MICROSOFT" ||
+      credential.status !== "CONNECTED"
+    )
+      return false;
+    const marked = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.mailbox.updateMany({
+        where: {
+          id: mailboxId,
+          provider: "MICROSOFT",
+          status: "CONNECTED",
+          microsoftAuthMode: credential.microsoftAuthMode,
+          microsoftClientId: credential.microsoftClientId,
+          homeAccountId: credential.homeAccountId,
+          tokenCacheEncrypted: credential.tokenCacheEncrypted,
+        },
         data: {
           status: "AUTH_REQUIRED",
-          lastErrorCode: code,
+          lastErrorCode: code.slice(0, 200),
           lastErrorMessage: message.slice(0, 1000),
         },
-      })
-      .catch(() => undefined);
-    await this.prisma.autoReplyTask
-      .updateMany({
+      });
+      if (!updated.count) return false;
+      await tx.autoReplyTask.updateMany({
         where: {
           mailboxId,
           status: { in: ["RUNNING", "INITIALIZING"] },
         },
         data: { status: "PAUSED", pausedAt: new Date(), nextPollAt: null },
-      })
-      .catch(() => undefined);
-    await this.prisma.$executeRaw`
+      });
+      await tx.$executeRaw`
         DELETE FROM "TransactionalOutbox" AS outbox
         USING "MessageReceipt" AS receipt
         WHERE outbox."aggregateId" = receipt."id"
           AND receipt."mailboxId" = ${mailboxId}
           AND outbox."kind" IN ('PROCESS_MESSAGE', 'VERIFY_SEND')
-      `.catch(() => undefined);
+      `;
+      return true;
+    });
+    if (!marked) return false;
     await this.alerts.open({
       fingerprint: `mailbox-auth:${mailboxId}`,
       type: "MAILBOX_AUTH_REQUIRED",
@@ -338,6 +778,33 @@ export class GraphService {
       message: "Microsoft 授权已失效，自动回复已暂停。",
       metadata: { mailboxId, code },
     });
+    const current = await this.prisma.mailbox.findUnique({
+      where: { id: mailboxId },
+      select: { status: true, lastErrorCode: true },
+    });
+    if (
+      current?.status !== "AUTH_REQUIRED" ||
+      current.lastErrorCode !== code.slice(0, 200)
+    )
+      await this.alerts
+        .resolve(`mailbox-auth:${mailboxId}`)
+        .catch(() => undefined);
+    return true;
+  }
+
+  private credentialSnapshot(
+    mailbox: MicrosoftMailboxTokenRecord,
+    tokenCacheEncrypted = mailbox.tokenCacheEncrypted,
+  ): MicrosoftCredentialSnapshot {
+    return {
+      id: mailbox.id,
+      provider: mailbox.provider,
+      status: mailbox.status,
+      microsoftAuthMode: mailbox.microsoftAuthMode,
+      microsoftClientId: mailbox.microsoftClientId,
+      homeAccountId: mailbox.homeAccountId,
+      tokenCacheEncrypted,
+    };
   }
 
   private retryAfter(response: Response): number | undefined {
@@ -352,14 +819,31 @@ export class GraphService {
   }
 
   private errorCode(error: unknown): string {
+    if (error instanceof ProviderApiError || error instanceof AppError)
+      return error.code;
     if (typeof error === "object" && error && "errorCode" in error)
       return String((error as { errorCode: unknown }).errorCode);
+    if (typeof error === "object" && error && "code" in error)
+      return String((error as { code: unknown }).code);
     return "MSAL_REFRESH_FAILED";
+  }
+
+  private isGraphAuthorizationFailure(
+    status: number,
+    code: string,
+    message: string,
+  ): boolean {
+    if (status === 401) return true;
+    if (status !== 403) return false;
+    return /InvalidAuthenticationToken|AuthenticationError|InvalidToken|TokenExpired|token.+(?:expired|invalid|revoked)|(?:expired|invalid|revoked).+token/i.test(
+      `${code} ${message}`,
+    );
   }
 
   private isAuthorizationFailure(error: unknown): boolean {
     if (!error || typeof error !== "object") return false;
     const candidate = error as {
+      code?: unknown;
       errorCode?: unknown;
       subError?: unknown;
       errorMessage?: unknown;
@@ -367,6 +851,7 @@ export class GraphService {
       name?: unknown;
     };
     const text = [
+      candidate.code,
       candidate.errorCode,
       candidate.subError,
       candidate.errorMessage,
@@ -376,7 +861,7 @@ export class GraphService {
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
-    return /interaction_required|consent_required|login_required|invalid_grant|invalid_client|unauthorized_client|client_secret|no_tokens_found|token_refresh_required|account.*missing/.test(
+    return /interaction_required|consent_required|login_required|invalid_grant|invalid_client|unauthorized_client|client_secret|no_tokens_found|token_refresh_required|account.*missing|token_cache_invalid|scopes_missing|client_id_missing/.test(
       text,
     );
   }

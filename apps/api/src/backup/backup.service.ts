@@ -51,14 +51,26 @@ export class BackupService {
           displayName: string;
           status: string;
           provider?: string;
+          microsoftAuthMode?: string;
         }>
-      ).map(({ id, email, displayName, status, provider }) => ({
-        id,
-        email,
-        displayName,
-        status,
-        provider: provider ?? "MICROSOFT",
-      })),
+      ).map(
+        ({ id, email, displayName, status, provider, microsoftAuthMode }) => {
+          const normalizedProvider = provider ?? "MICROSOFT";
+          return {
+            id,
+            email,
+            displayName,
+            status,
+            provider: normalizedProvider,
+            microsoftAuthMode:
+              normalizedProvider === "MICROSOFT"
+                ? microsoftAuthMode === "CLIENT_ID_REFRESH_TOKEN"
+                  ? "CLIENT_ID_REFRESH_TOKEN"
+                  : "MSAL_OAUTH"
+                : undefined,
+          };
+        },
+      ),
       tasks: (
         data.tables.tasks as Array<{
           id: string;
@@ -156,6 +168,15 @@ export class BackupService {
             const mailboxRow = this.withDates(row);
             delete mailboxRow.tokenCachePlain;
             const provider = row.provider === "GOOGLE" ? "GOOGLE" : "MICROSOFT";
+            const microsoftAuthMode =
+              provider === "MICROSOFT" &&
+              row.microsoftAuthMode === "CLIENT_ID_REFRESH_TOKEN"
+                ? "CLIENT_ID_REFRESH_TOKEN"
+                : "MSAL_OAUTH";
+            const microsoftClientId =
+              microsoftAuthMode === "CLIENT_ID_REFRESH_TOKEN"
+                ? row.microsoftClientId
+                : null;
             const restoredMailboxStatus = [
               "CONNECTED",
               "AUTH_REQUIRED",
@@ -169,6 +190,8 @@ export class BackupService {
               create: {
                 ...mailboxRow,
                 provider,
+                microsoftAuthMode,
+                microsoftClientId,
                 tokenCacheEncrypted: await this.crypto.encryptString(
                   row.tokenCachePlain,
                   provider === "GOOGLE"
@@ -182,6 +205,8 @@ export class BackupService {
               update: {
                 ...mailboxRow,
                 provider,
+                microsoftAuthMode,
+                microsoftClientId,
                 tokenCacheEncrypted: await this.crypto.encryptString(
                   row.tokenCachePlain,
                   provider === "GOOGLE"
@@ -755,6 +780,52 @@ export class BackupService {
           "备份中的邮箱授权缓存无效",
           400,
         );
+      const microsoftAuthMode = row.microsoftAuthMode ?? "MSAL_OAUTH";
+      if (
+        !["MSAL_OAUTH", "CLIENT_ID_REFRESH_TOKEN"].includes(
+          microsoftAuthMode,
+        ) ||
+        (provider === "GOOGLE" &&
+          microsoftAuthMode === "CLIENT_ID_REFRESH_TOKEN")
+      )
+        throw new AppError(
+          "BACKUP_MICROSOFT_AUTH_MODE_INVALID",
+          "备份包含无效的 Microsoft 授权方式",
+          400,
+        );
+      if (microsoftAuthMode === "CLIENT_ID_REFRESH_TOKEN") {
+        if (
+          typeof row.microsoftClientId !== "string" ||
+          !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+            row.microsoftClientId,
+          )
+        )
+          throw new AppError(
+            "BACKUP_MICROSOFT_CLIENT_ID_INVALID",
+            "备份中的 Microsoft Client ID 无效",
+            400,
+          );
+        try {
+          const token = JSON.parse(row.tokenCachePlain) as {
+            version?: unknown;
+            refreshToken?: unknown;
+            scope?: unknown;
+          };
+          if (
+            token.version !== 1 ||
+            typeof token.refreshToken !== "string" ||
+            !token.refreshToken ||
+            typeof token.scope !== "string"
+          )
+            throw new Error("invalid token cache");
+        } catch {
+          throw new AppError(
+            "BACKUP_TOKEN_INVALID",
+            "备份中的 Microsoft Refresh Token 授权缓存无效",
+            400,
+          );
+        }
+      }
     }
     const requireReference = (
       source: string,

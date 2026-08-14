@@ -260,7 +260,11 @@ export class GoogleService {
         409,
       );
     const existing = await this.prisma.mailbox.findUnique({ where: { email } });
-    if (existing && existing.provider !== "GOOGLE")
+    if (
+      existing &&
+      existing.provider !== "GOOGLE" &&
+      existing.status !== "REMOVED"
+    )
       throw new AppError(
         "MAILBOX_PROVIDER_CONFLICT",
         "该邮箱地址已经通过 Microsoft 提供商连接，不能重复连接",
@@ -301,6 +305,8 @@ export class GoogleService {
       },
       update: {
         provider: "GOOGLE",
+        microsoftAuthMode: "MSAL_OAUTH",
+        microsoftClientId: null,
         displayName: user.name || email,
         tenantId: null,
         accountType,
@@ -313,7 +319,9 @@ export class GoogleService {
       },
     });
     await this.prisma.oAuthState.delete({ where: { id } });
-    await this.alerts.resolve(`mailbox-auth:${mailbox.id}`);
+    await this.alerts
+      .resolve(`mailbox-auth:${mailbox.id}`)
+      .catch(() => undefined);
     return {
       redirectTo: state.redirectAfter || "/mailboxes",
       mailboxId: mailbox.id,

@@ -37,6 +37,8 @@ export type Mailbox = {
   id: string;
   email: string;
   provider: "MICROSOFT" | "GOOGLE";
+  microsoftAuthMode?: "MSAL_OAUTH" | "CLIENT_ID_REFRESH_TOKEN";
+  microsoftClientId?: string | null;
   displayName: string;
   tenantId?: string;
   accountType?: string;

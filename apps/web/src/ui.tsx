@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useEffect, useId, type ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, LoaderCircle, X } from "lucide-react";
 
 let uiTimezone = "Asia/Shanghai";
@@ -80,6 +80,18 @@ export function Modal({
   wide?: boolean;
 }) {
   const titleId = useId();
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose?.();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [onClose]);
   return (
     <div
       className="modal-backdrop"

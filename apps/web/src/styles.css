@@ -370,6 +370,99 @@ label small {
   flex-wrap: wrap;
   gap: 10px;
 }
+.auth-method-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.auth-method-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface-2);
+}
+.auth-method-card.recommended {
+  border-color: color-mix(in srgb, var(--primary) 48%, var(--line));
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.auth-method-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.auth-method-heading > div:last-child {
+  min-width: 0;
+}
+.auth-method-heading h3 {
+  margin: 0 0 5px;
+  font-size: 16px;
+}
+.auth-method-icon {
+  width: 43px;
+  height: 43px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+.auth-method-icon.secondary {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.recommended-badge,
+.method-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+.recommended-badge svg {
+  width: 13px;
+  height: 13px;
+}
+.method-label {
+  color: var(--muted);
+}
+.auth-method-card p,
+.auth-method-card ul {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.auth-method-card ul {
+  padding-left: 18px;
+}
+.auth-method-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.auth-method-card label small {
+  color: var(--muted);
+  font-weight: 400;
+  line-height: 1.55;
+}
+.auth-method-submit {
+  width: 100%;
+  justify-content: center;
+  margin-top: auto;
+}
+.break-value {
+  overflow-wrap: anywhere;
+}
 .card {
   background: color-mix(in srgb, var(--surface) 96%, transparent);
   border: 1px solid var(--line);
@@ -1623,6 +1716,9 @@ td small {
     grid-template-columns: minmax(0, 1fr);
   }
   .provider-permissions {
+    grid-template-columns: 1fr;
+  }
+  .auth-method-grid {
     grid-template-columns: 1fr;
   }
   .processing-periods {

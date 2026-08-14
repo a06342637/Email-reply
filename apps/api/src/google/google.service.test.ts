@@ -123,4 +123,73 @@ describe("GoogleService", () => {
       }),
     );
   });
+
+  it("allows a removed Microsoft record to be reconnected as Gmail", async () => {
+    const state = {
+      id: "state-1",
+      provider: "GOOGLE",
+      stateHash: "hash",
+      verifierEncrypted: "encrypted-verifier",
+      redirectAfter: "/mailboxes",
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const prisma = {
+      systemSetting: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ value: "https://mail.example.com" }),
+      },
+      oAuthState: {
+        findUnique: vi.fn().mockResolvedValue(state),
+        delete: vi.fn().mockResolvedValue({}),
+      },
+      mailbox: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "mailbox-1",
+          provider: "MICROSOFT",
+          status: "REMOVED",
+        }),
+        count: vi.fn().mockResolvedValue(0),
+        upsert: vi.fn().mockResolvedValue({ id: "mailbox-1" }),
+      },
+    };
+    const service = new GoogleService(
+      prisma as never,
+      {
+        safeEqual: vi.fn().mockReturnValue(true),
+        hmac: vi.fn().mockReturnValue("hash"),
+        decryptString: vi.fn().mockResolvedValue("verifier"),
+        encryptString: vi.fn().mockResolvedValue("encrypted-google-token"),
+      } as never,
+      { publicUrl: "" } as never,
+      {
+        exchangeAuthorizationCode: vi.fn().mockResolvedValue({
+          accessToken: "access",
+          refreshToken: "refresh",
+        }),
+        gmailProfile: vi.fn().mockResolvedValue({
+          emailAddress: "owner@example.com",
+          historyId: "100",
+        }),
+        userInfo: vi.fn().mockResolvedValue({
+          sub: "google-user-1",
+          name: "Owner",
+        }),
+      } as never,
+      { resolve: vi.fn().mockResolvedValue(undefined) } as never,
+    );
+
+    await expect(
+      service.finishOAuth("code", "state-1.raw"),
+    ).resolves.toMatchObject({ mailboxId: "mailbox-1" });
+    expect(prisma.mailbox.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          provider: "GOOGLE",
+          microsoftAuthMode: "MSAL_OAUTH",
+          microsoftClientId: null,
+        }),
+      }),
+    );
+  });
 });

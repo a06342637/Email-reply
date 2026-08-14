@@ -274,7 +274,10 @@ export function SettingsPage() {
             <h2>Microsoft Graph 应用</h2>
             <Notice>
               应用注册必须选择“任何组织目录中的账户和个人 Microsoft
-              账户”。Client Secret 保存后不再回显。
+              账户”。这里的 Client ID/Secret 只供“OAuth
+              网页登录”方式使用；使用独立 Client ID + Refresh Token
+              导入的邮箱不受这里的 Client ID 变更影响。Client Secret
+              保存后不再回显。
             </Notice>
             <div className="form-grid">
               <label>
