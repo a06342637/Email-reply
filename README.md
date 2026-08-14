@@ -1178,11 +1178,12 @@ npm run ui:smoke
 http://127.0.0.1:4174
 ```
 
-仓库内置 GitHub Actions，会在 Linux/Node.js 22 上重复静态检查，并构建、启动完整 Docker Compose 栈，验证迁移、PostgreSQL、Redis、app、worker、健康接口和运维 CLI。
+仓库内置 GitHub Actions，会在 Linux/Node.js 22 上重复静态检查，并构建、启动完整 Docker Compose 栈，验证迁移、关键数据库索引、PostgreSQL、Redis、app、worker、健康接口、维护任务和运维 CLI。
 
-当前自动化测试覆盖：
+当前包含 18 个后端测试文件、53 项自动化测试，覆盖：
 
 - Graph Token 临时故障和授权失效区分。
+- 更换 Microsoft Client ID 时配置、停用与队列清理的事务一致性。
 - MIME 循环抑制、追踪头和非 ASCII Subject 编码。
 - 已发送邮件跨页追踪查询。
 - PostgreSQL Outbox 防丢恢复。
@@ -1190,6 +1191,12 @@ http://127.0.0.1:4174
 - From/Reply-To 分离和 Microsoft 服务邮件防绕过。
 - HTML 清洗、Liquid 转义和外部文件引用禁用。
 - 模板渲染失败、附件上传中断和发送核验恢复。
+- 核验任务写入失败后，中断邮件无需重启 Worker 即可恢复。
+- Delta 普通与恢复扫描恰好 200 页的分页边界。
+- Delta 分页中断时只使用最后完整游标回退，避免漏掉更早邮件。
+- 任务在 Worker 领取邮件后的暂停竞态与恢复排队。
+- Webhook 多端点独立持久投递、投递租约和失败隔离。
+- 登录失败原子计数与 TOTP 恢复码一次性消费。
 - 临时管理员凭据清理。
 - 生产镜像依赖裁剪与 Nest 运行依赖解析。
 

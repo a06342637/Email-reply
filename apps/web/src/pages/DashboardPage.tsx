@@ -57,6 +57,7 @@ export function DashboardPage() {
   ];
   const sent = data.stats24h?.sent ?? count(data.states24h, "SENT", "state");
   const queued = data.pendingOutbox ?? 0;
+  const latestWorker = data.workers[0];
   return (
     <>
       <PageHeader
@@ -174,12 +175,12 @@ export function DashboardPage() {
               <div>
                 <strong>Worker</strong>
                 <small>
-                  {data.workers[0]
-                    ? `最后心跳 ${fmtDate(data.workers[0].updatedAt)}`
+                  {latestWorker
+                    ? `最后心跳 ${fmtDate(latestWorker.updatedAt)}`
                     : "尚未启动"}
                 </small>
               </div>
-              <Status value={data.workers[0] ? "RUNNING" : "PAUSED"} />
+              <Status value={latestWorker?.healthy ? "RUNNING" : "ERROR"} />
             </div>
             <div>
               <Clock3 />

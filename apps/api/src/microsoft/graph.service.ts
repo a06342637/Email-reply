@@ -315,20 +315,13 @@ export class GraphService {
         data: { status: "PAUSED", pausedAt: new Date(), nextPollAt: null },
       })
       .catch(() => undefined);
-    const receiptIds = await this.prisma.messageReceipt
-      .findMany({ where: { mailboxId }, select: { id: true } })
-      .then((rows) => rows.map((row) => row.id))
-      .catch(() => [] as string[]);
-    if (receiptIds.length) {
-      await this.prisma.transactionalOutbox
-        .deleteMany({
-          where: {
-            aggregateId: { in: receiptIds },
-            kind: { in: ["PROCESS_MESSAGE", "VERIFY_SEND"] },
-          },
-        })
-        .catch(() => undefined);
-    }
+    await this.prisma.$executeRaw`
+        DELETE FROM "TransactionalOutbox" AS outbox
+        USING "MessageReceipt" AS receipt
+        WHERE outbox."aggregateId" = receipt."id"
+          AND receipt."mailboxId" = ${mailboxId}
+          AND outbox."kind" IN ('PROCESS_MESSAGE', 'VERIFY_SEND')
+      `.catch(() => undefined);
     await this.alerts.open({
       fingerprint: `mailbox-auth:${mailboxId}`,
       type: "MAILBOX_AUTH_REQUIRED",

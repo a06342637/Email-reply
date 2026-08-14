@@ -85,12 +85,6 @@ export class MailboxService {
         "只有已连接邮箱可以停用",
         409,
       );
-    const receiptIds = (
-      await this.prisma.messageReceipt.findMany({
-        where: { mailboxId: id },
-        select: { id: true },
-      })
-    ).map((row) => row.id);
     await this.prisma.$transaction([
       this.prisma.mailbox.update({
         where: { id },
@@ -100,12 +94,13 @@ export class MailboxService {
         where: { mailboxId: id, status: { not: "DELETED" } },
         data: { status: "PAUSED", pausedAt: new Date(), nextPollAt: null },
       }),
-      this.prisma.transactionalOutbox.deleteMany({
-        where: {
-          aggregateId: { in: receiptIds },
-          kind: { in: ["PROCESS_MESSAGE", "VERIFY_SEND"] },
-        },
-      }),
+      this.prisma.$executeRaw`
+        DELETE FROM "TransactionalOutbox" AS outbox
+        USING "MessageReceipt" AS receipt
+        WHERE outbox."aggregateId" = receipt."id"
+          AND receipt."mailboxId" = ${id}
+          AND outbox."kind" IN ('PROCESS_MESSAGE', 'VERIFY_SEND')
+      `,
     ]);
   }
 
@@ -135,12 +130,6 @@ export class MailboxService {
     const mailbox = await this.prisma.mailbox.findUniqueOrThrow({
       where: { id },
     });
-    const receiptIds = (
-      await this.prisma.messageReceipt.findMany({
-        where: { mailboxId: id },
-        select: { id: true },
-      })
-    ).map((row) => row.id);
     await this.prisma.$transaction([
       this.prisma.autoReplyTask.updateMany({
         where: { mailboxId: id },
@@ -148,12 +137,13 @@ export class MailboxService {
       }),
       this.prisma.folderCursor.deleteMany({ where: { mailboxId: id } }),
       this.prisma.replyRule.deleteMany({ where: { task: { mailboxId: id } } }),
-      this.prisma.transactionalOutbox.deleteMany({
-        where: {
-          aggregateId: { in: receiptIds },
-          kind: { in: ["PROCESS_MESSAGE", "VERIFY_SEND"] },
-        },
-      }),
+      this.prisma.$executeRaw`
+        DELETE FROM "TransactionalOutbox" AS outbox
+        USING "MessageReceipt" AS receipt
+        WHERE outbox."aggregateId" = receipt."id"
+          AND receipt."mailboxId" = ${id}
+          AND outbox."kind" IN ('PROCESS_MESSAGE', 'VERIFY_SEND')
+      `,
       this.prisma.messageReceipt.updateMany({
         where: {
           mailboxId: id,
@@ -388,14 +378,13 @@ export class MailboxService {
           activationAt: null,
         },
       }),
-      this.prisma.transactionalOutbox.deleteMany({
-        where: {
-          aggregateId: {
-            in: await this.receiptIds(id),
-          },
-          kind: { in: ["PROCESS_MESSAGE", "VERIFY_SEND"] },
-        },
-      }),
+      this.prisma.$executeRaw`
+        DELETE FROM "TransactionalOutbox" AS outbox
+        USING "MessageReceipt" AS receipt
+        WHERE outbox."aggregateId" = receipt."id"
+          AND receipt."taskId" = ${id}
+          AND outbox."kind" IN ('PROCESS_MESSAGE', 'VERIFY_SEND')
+      `,
       this.prisma.messageReceipt.updateMany({
         where: {
           taskId: id,
@@ -579,22 +568,12 @@ export class MailboxService {
   }
 
   private async clearTaskOutbox(taskId: string): Promise<void> {
-    const ids = await this.receiptIds(taskId);
-    if (!ids.length) return;
-    await this.prisma.transactionalOutbox.deleteMany({
-      where: {
-        aggregateId: { in: ids },
-        kind: { in: ["PROCESS_MESSAGE", "VERIFY_SEND"] },
-      },
-    });
-  }
-
-  private async receiptIds(taskId: string): Promise<string[]> {
-    return (
-      await this.prisma.messageReceipt.findMany({
-        where: { taskId },
-        select: { id: true },
-      })
-    ).map((row) => row.id);
+    await this.prisma.$executeRaw`
+      DELETE FROM "TransactionalOutbox" AS outbox
+      USING "MessageReceipt" AS receipt
+      WHERE outbox."aggregateId" = receipt."id"
+        AND receipt."taskId" = ${taskId}
+        AND outbox."kind" IN ('PROCESS_MESSAGE', 'VERIFY_SEND')
+    `;
   }
 }

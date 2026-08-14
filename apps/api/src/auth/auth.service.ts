@@ -59,17 +59,9 @@ export class AuthService {
 
     const valid = await verify(admin.passwordHash, password).catch(() => false);
     if (!valid) {
-      const failures = admin.failedLoginCount + 1;
-      await this.prisma.adminUser.update({
-        where: { id: admin.id },
-        data: {
-          failedLoginCount: failures >= 5 ? 0 : failures,
-          lockedUntil:
-            failures >= 5 ? new Date(Date.now() + 15 * 60_000) : null,
-        },
-      });
+      const locked = await this.recordFailedLogin(admin.id);
       await this.auditLoginFailure(req, admin.id, "INVALID_PASSWORD", {
-        locked: failures >= 5,
+        locked,
       });
       throw new AppError(
         "INVALID_CREDENTIALS",
@@ -92,7 +84,11 @@ export class AuthService {
       );
       let totpValid = authenticator.check(totpCode.replace(/\s/g, ""), secret);
       if (!totpValid) {
-        const hashes = totp.recoveryCodeHashes as string[];
+        const hashes = Array.isArray(totp.recoveryCodeHashes)
+          ? totp.recoveryCodeHashes.filter(
+              (item): item is string => typeof item === "string",
+            )
+          : [];
         const match = hashes.find((item) =>
           this.crypto.safeEqual(
             item,
@@ -100,26 +96,25 @@ export class AuthService {
           ),
         );
         if (match) {
-          totpValid = true;
-          await this.prisma.totpCredential.update({
-            where: { adminId: admin.id },
+          const consumed = await this.prisma.totpCredential.updateMany({
+            where: {
+              adminId: admin.id,
+              recoveryCodeHashes: { equals: hashes },
+            },
             data: {
               recoveryCodeHashes: hashes.filter((item) => item !== match),
             },
           });
+          // The JSON comparison makes recovery-code consumption atomic: two
+          // concurrent logins can never reuse the same one-time code.
+          totpValid = consumed.count === 1;
         }
       }
       if (!totpValid) {
-        const failures = admin.failedLoginCount + 1;
-        await this.prisma.adminUser.update({
-          where: { id: admin.id },
-          data: {
-            failedLoginCount: failures >= 5 ? 0 : failures,
-            lockedUntil:
-              failures >= 5 ? new Date(Date.now() + 15 * 60_000) : null,
-          },
+        const locked = await this.recordFailedLogin(admin.id);
+        await this.auditLoginFailure(req, admin.id, "INVALID_TOTP", {
+          locked,
         });
-        await this.auditLoginFailure(req, admin.id, "INVALID_TOTP");
         throw new AppError(
           "INVALID_CREDENTIALS",
           "用户名、密码或验证码错误",
@@ -162,7 +157,11 @@ export class AuthService {
     }
     req.auth = { admin: session.admin, session };
     const { idleMs } = await this.sessionDurations();
-    if (now - session.lastSeenAt.getTime() > 5 * 60_000) {
+    const refreshAfterMs = Math.min(
+      5 * 60_000,
+      Math.max(30_000, Math.floor(idleMs / 2)),
+    );
+    if (now - session.lastSeenAt.getTime() > refreshAfterMs) {
       await this.prisma.adminSession.update({
         where: { id: session.id },
         data: {
@@ -418,5 +417,22 @@ export class AuthService {
         },
       })
       .catch(() => undefined);
+  }
+
+  private async recordFailedLogin(adminId: string): Promise<boolean> {
+    const updated = await this.prisma.adminUser.update({
+      where: { id: adminId },
+      data: { failedLoginCount: { increment: 1 } },
+      select: { failedLoginCount: true },
+    });
+    if (updated.failedLoginCount < 5) return false;
+    const locked = await this.prisma.adminUser.updateMany({
+      where: { id: adminId, failedLoginCount: { gte: 5 } },
+      data: {
+        failedLoginCount: 0,
+        lockedUntil: new Date(Date.now() + 15 * 60_000),
+      },
+    });
+    return locked.count > 0;
   }
 }

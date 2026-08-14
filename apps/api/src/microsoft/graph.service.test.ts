@@ -26,6 +26,7 @@ function fixture(tokenError?: unknown) {
     transactionalOutbox: {
       deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
+    $executeRaw: vi.fn().mockResolvedValue(0),
   };
   const crypto = {
     decryptString: vi.fn().mockResolvedValue("serialized-cache"),

@@ -29,6 +29,7 @@ type PreparedMessage = {
 
 const SELECT_FIELDS =
   "id,internetMessageId,conversationId,subject,receivedDateTime,sender,from,replyTo,internetMessageHeaders";
+const MAX_DELTA_PAGES = 200;
 
 class PollInactiveError extends Error {}
 
@@ -191,7 +192,10 @@ export class DeltaService {
     else url = this.initialDeltaUrl(folder, task.activationAt ?? new Date());
 
     let pages = 0;
-    while (url && pages++ < 200) {
+    while (url) {
+      if (pages >= MAX_DELTA_PAGES)
+        throw new Error(`Delta pagination exceeded safety limit for ${folder}`);
+      pages += 1;
       await this.assertRestoreOpen();
       await this.assertTaskActive(task.id);
       let page: DeltaResponse;
@@ -229,8 +233,6 @@ export class DeltaService {
       if (next) url = next;
       else break;
     }
-    if (pages >= 200)
-      throw new Error(`Delta pagination exceeded safety limit for ${folder}`);
   }
 
   private async recoverCursor(
@@ -256,7 +258,12 @@ export class DeltaService {
     });
     let url = this.initialDeltaUrl(folder, overlapStart);
     let pages = 0;
-    while (url && pages++ < 200) {
+    while (url) {
+      if (pages >= MAX_DELTA_PAGES)
+        throw new Error(
+          `Delta recovery pagination exceeded safety limit for ${folder}`,
+        );
+      pages += 1;
       await this.assertRestoreOpen();
       await this.assertTaskActive(task.id);
       const page = await this.graph.request<DeltaResponse>(
@@ -285,10 +292,6 @@ export class DeltaService {
       if (!next) break;
       url = next;
     }
-    if (pages >= 200)
-      throw new Error(
-        `Delta recovery pagination exceeded safety limit for ${folder}`,
-      );
   }
 
   private async ingestPage(
@@ -382,6 +385,19 @@ export class DeltaService {
               throw error;
           }
         }
+        const pageHighWater = prepared.reduce<Date | null>(
+          (latest, item) =>
+            !latest || item.receivedAt > latest ? item.receivedAt : latest,
+          null,
+        );
+        const storedCursor = pageHighWater
+          ? await tx.folderCursor.findUnique({
+              where: {
+                mailboxId_folder: { mailboxId: task.mailboxId, folder },
+              },
+              select: { highWaterAt: true },
+            })
+          : null;
         await tx.folderCursor.update({
           where: { mailboxId_folder: { mailboxId: task.mailboxId, folder } },
           data: {
@@ -389,15 +405,13 @@ export class DeltaService {
             ...(links.deltaEncrypted
               ? { deltaLinkEncrypted: links.deltaEncrypted }
               : {}),
-            lastSuccessfulAt: now,
+            lastSuccessfulAt: links.deltaEncrypted ? now : undefined,
             highWaterAt:
-              prepared.reduce<Date | null>(
-                (latest, item) =>
-                  !latest || item.receivedAt > latest
-                    ? item.receivedAt
-                    : latest,
-                null,
-              ) ?? undefined,
+              pageHighWater &&
+              (!storedCursor?.highWaterAt ||
+                pageHighWater > storedCursor.highWaterAt)
+                ? pageHighWater
+                : undefined,
             initializedAt: links.deltaEncrypted ? now : undefined,
           },
         });

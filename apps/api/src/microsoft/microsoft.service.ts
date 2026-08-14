@@ -63,7 +63,7 @@ export class MicrosoftService {
         )
       : existing!.clientSecretEncrypted;
     const clientChanged = Boolean(existing && existing.clientId !== clientId);
-    const saved = await this.prisma.microsoftAppConfig.upsert({
+    const configWrite = {
       where: { id: "singleton" },
       create: {
         id: "singleton",
@@ -80,30 +80,29 @@ export class MicrosoftService {
           ? new Date(input.secretExpiresAt)
           : null,
       },
-    });
+    };
+    const saved = clientChanged
+      ? await this.prisma.$transaction(async (tx) => {
+          const row = await tx.microsoftAppConfig.upsert(configWrite);
+          await tx.mailbox.updateMany({
+            where: { status: { not: "REMOVED" } },
+            data: {
+              status: "AUTH_REQUIRED",
+              lastErrorCode: "CLIENT_ID_CHANGED",
+              lastErrorMessage: "Microsoft Client ID 已更改，需要重新授权邮箱",
+            },
+          });
+          await tx.autoReplyTask.updateMany({
+            where: { status: { in: ["RUNNING", "INITIALIZING"] } },
+            data: { status: "PAUSED", pausedAt: new Date(), nextPollAt: null },
+          });
+          await tx.transactionalOutbox.deleteMany({
+            where: { kind: { in: ["PROCESS_MESSAGE", "VERIFY_SEND"] } },
+          });
+          return row;
+        })
+      : await this.prisma.microsoftAppConfig.upsert(configWrite);
     if (clientChanged) {
-      const receiptIds = (
-        await this.prisma.messageReceipt.findMany({ select: { id: true } })
-      ).map((row) => row.id);
-      await this.prisma.mailbox.updateMany({
-        where: { status: { not: "REMOVED" } },
-        data: {
-          status: "AUTH_REQUIRED",
-          lastErrorCode: "CLIENT_ID_CHANGED",
-          lastErrorMessage: "Microsoft Client ID 已更改，需要重新授权邮箱",
-        },
-      });
-      await this.prisma.autoReplyTask.updateMany({
-        where: { status: { in: ["RUNNING", "INITIALIZING"] } },
-        data: { status: "PAUSED", pausedAt: new Date(), nextPollAt: null },
-      });
-      if (receiptIds.length)
-        await this.prisma.transactionalOutbox.deleteMany({
-          where: {
-            aggregateId: { in: receiptIds },
-            kind: { in: ["PROCESS_MESSAGE", "VERIFY_SEND"] },
-          },
-        });
       const affected = await this.prisma.mailbox.findMany({
         where: { status: "AUTH_REQUIRED" },
         select: { id: true },

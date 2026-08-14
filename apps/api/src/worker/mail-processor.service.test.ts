@@ -154,6 +154,34 @@ describe("MailProcessorService", () => {
     );
   });
 
+  it("keeps a claimed message queued when the task is paused before draft creation", async () => {
+    const pausedReceipt = {
+      ...baseReceipt,
+      task: { status: "PAUSED" },
+    };
+    const { service, prisma, transport } = fixture(
+      [baseReceipt, pausedReceipt],
+      async () => ({
+        subject: "Re: Order question",
+        html: "<p>Received</p>",
+        text: "Received",
+        assets: [],
+      }),
+    );
+
+    await service.process(baseReceipt.id);
+
+    expect(transport.createReplyDraft).not.toHaveBeenCalled();
+    expect(prisma.messageReceipt.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          state: "QUEUED",
+          lastErrorCode: "SEND_DEFERRED_INACTIVE",
+        }),
+      }),
+    );
+  });
+
   it("does not send a draft again when a duplicate create verification sees an attempt already sending", async () => {
     const { service, prisma, transport } = fixture([baseReceipt], async () => ({
       subject: "Re: Order question",

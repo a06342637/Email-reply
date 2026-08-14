@@ -100,12 +100,23 @@ export class AppMonitorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async deliverDirect(alertId: string): Promise<void> {
-    const rows = await this.prisma.transactionalOutbox.findMany({
-      where: { kind: "WEBHOOK", aggregateId: alertId },
-      select: { id: true },
-      take: 20,
-    });
-    for (const row of rows)
-      await this.webhooks.deliver(row.id).catch(() => undefined);
+    // The first pass can fan a generic alert row out into one durable row per
+    // endpoint. A second pass delivers those rows immediately when the Worker
+    // itself is the component that is down.
+    for (let pass = 0; pass < 2; pass += 1) {
+      const rows = await this.prisma.transactionalOutbox.findMany({
+        where: {
+          kind: "WEBHOOK",
+          aggregateId: alertId,
+          availableAt: { lte: new Date() },
+        },
+        select: { id: true },
+        orderBy: { createdAt: "asc" },
+        take: 20,
+      });
+      if (!rows.length) return;
+      for (const row of rows)
+        await this.webhooks.deliver(row.id).catch(() => undefined);
+    }
   }
 }

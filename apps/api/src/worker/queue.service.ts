@@ -232,6 +232,65 @@ export class OutboxDispatcherService {
       .catch(() => undefined);
   }
 
+  async recoverInterruptedReceipt(
+    receiptId: string,
+    currentOutboxId?: string,
+  ): Promise<boolean> {
+    const receipt = await this.prisma.messageReceipt.findUnique({
+      where: { id: receiptId },
+      include: { attempts: { orderBy: { number: "desc" }, take: 1 } },
+    });
+    if (
+      !receipt ||
+      !["CREATING_DRAFT", "DRAFT_READY", "SENDING"].includes(receipt.state)
+    )
+      return false;
+
+    const attempt = receipt.attempts[0];
+    if (!attempt) {
+      const recoveryKey = `recovery-process:${receiptId}:${currentOutboxId ?? "runtime"}`;
+      await this.prisma.$transaction([
+        this.prisma.messageReceipt.updateMany({
+          where: {
+            id: receiptId,
+            state: { in: ["CREATING_DRAFT", "DRAFT_READY", "SENDING"] },
+          },
+          data: { state: "QUEUED" },
+        }),
+        this.prisma.transactionalOutbox.upsert({
+          where: { dedupeKey: recoveryKey },
+          create: {
+            kind: "PROCESS_MESSAGE",
+            aggregateId: receiptId,
+            dedupeKey: recoveryKey,
+            payload: { receiptId },
+          },
+          update: {},
+        }),
+      ]);
+      return true;
+    }
+
+    const phase =
+      attempt.verificationPhase ||
+      (attempt.draftMessageId && receipt.state === "SENDING"
+        ? "SEND"
+        : "CREATE");
+    const stage = Math.min(2, Math.max(0, attempt.verificationStage));
+    await this.prisma.transactionalOutbox.upsert({
+      where: { dedupeKey: `verify:${attempt.id}:${stage}:${phase}` },
+      create: {
+        kind: "VERIFY_SEND",
+        aggregateId: receiptId,
+        dedupeKey: `verify:${attempt.id}:${stage}:${phase}`,
+        payload: { receiptId, attemptId: attempt.id, stage, phase },
+        availableAt: new Date(Date.now() + 5_000),
+      },
+      update: {},
+    });
+    return true;
+  }
+
   private retryDelay(kind: string, attempt: number): number {
     if (kind === "WEBHOOK") {
       if (attempt <= 1) return 60_000;

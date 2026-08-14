@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BellRing, Check } from "lucide-react";
 import { api, json } from "../api";
 import { useApp } from "../app-context";
@@ -6,12 +6,19 @@ import { Card, Empty, Loading, PageHeader, Status, fmtDate } from "../ui";
 export function AlertsPage() {
   const { notify } = useApp();
   const [data, setData] = useState<any[]>();
-  async function load() {
+  const load = useCallback(async () => {
     setData(await api("/api/v1/alerts"));
-  }
+  }, []);
   useEffect(() => {
     void load();
-  }, []);
+    const events = new EventSource("/api/v1/events");
+    events.onmessage = () => void load();
+    const fallback = window.setInterval(() => void load(), 30_000);
+    return () => {
+      events.close();
+      window.clearInterval(fallback);
+    };
+  }, [load]);
   async function ack(id: string) {
     await api(`/api/v1/alerts/${id}/acknowledge`, json("PATCH"));
     notify("告警已确认");

@@ -89,7 +89,10 @@ export class ObservabilityController {
       stats24h,
       stats7d,
       openAlerts,
-      workers,
+      workers: workers.map((worker) => ({
+        ...worker,
+        healthy: worker.updatedAt >= new Date(now - 60_000),
+      })),
       recent,
       pendingOutbox,
     };
@@ -635,8 +638,9 @@ export class ObservabilityController {
   private safeSpreadsheetCell(value: unknown): string {
     const text = String(value ?? "");
     // CSV exports are often opened directly in Excel/LibreOffice. Prefix
-    // formula-looking user-controlled values so they remain inert text.
-    return /^[=+\-@]/.test(text) ? `'${text}` : text;
+    // formula-looking user-controlled values (including leading whitespace
+    // and control characters) so they remain inert text.
+    return /^\s*[=+\-@]/.test(text) ? `'${text}` : text;
   }
 
   private positiveInt(value: string, fallback: number, max: number): number {

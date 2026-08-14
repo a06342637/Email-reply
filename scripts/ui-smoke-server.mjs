@@ -116,6 +116,7 @@ const mailbox = {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  if (url.pathname === "/api/v1/events") return eventStream(req, res);
   if (url.pathname.startsWith("/api/")) {
     const body = await readJson(req);
     return api(url.pathname, req.method || "GET", body, res);
@@ -165,7 +166,7 @@ function api(path, method, body, res) {
       stats24h: { discovered: 25, sent: 18, filtered: 5, failed: 2 },
       stats7d: { discovered: 94, sent: 72, filtered: 18, failed: 4 },
       openAlerts: 0,
-      workers: [{ id: "worker-1", updatedAt: now }],
+      workers: [{ id: "worker-1", updatedAt: now, healthy: true }],
       recent: [
         {
           id: "log-1",
@@ -288,4 +289,15 @@ function json(res, value, status = 200) {
     "cache-control": "no-store",
   });
   res.end(JSON.stringify(value));
+}
+
+function eventStream(req, res) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+  });
+  res.write(`data: ${JSON.stringify({ type: "smoke.ready" })}\n\n`);
+  const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 15_000);
+  req.on("close", () => clearInterval(heartbeat));
 }

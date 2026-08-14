@@ -47,18 +47,30 @@ export class MailProcessorService {
     if (!attempt) return;
 
     const receipt = await this.loadReceipt(receiptId);
-    if (
-      !receipt ||
-      !receipt.templateRevisionId ||
-      !["RUNNING", "INITIALIZING"].includes(receipt.task.status) ||
-      receipt.mailbox.status !== "CONNECTED"
-    ) {
+    if (!receipt) return;
+    if (!receipt.templateRevisionId) {
       await this.failConfirmed(
         receiptId,
         "RECEIPT_NOT_SENDABLE",
-        "邮件、任务、邮箱或模板状态不允许发送",
+        "邮件没有可用的已锁定模板修订",
         attempt.id,
       );
+      return;
+    }
+    if (
+      !["RUNNING", "INITIALIZING"].includes(receipt.task.status) ||
+      receipt.mailbox.status !== "CONNECTED"
+    ) {
+      if (receipt.task.status === "DELETED")
+        await this.finishInactiveReceipt(receiptId, attempt.id);
+      else
+        await this.deferUnsent(
+          receiptId,
+          attempt.id,
+          undefined,
+          "SEND_DEFERRED_INACTIVE",
+          "任务或邮箱在创建草稿前被暂停，邮件将在恢复后继续处理",
+        );
       return;
     }
 
@@ -164,7 +176,7 @@ export class MailProcessorService {
       await this.enqueueVerification(receiptId, attempt.id, 0, "SEND");
     } catch (error) {
       if (this.isAuthorizationError(error)) {
-        await this.deferForAuthorization(
+        await this.deferUnsent(
           receiptId,
           attempt.id,
           draftId,
@@ -205,12 +217,10 @@ export class MailProcessorService {
         );
         return;
       }
-      await this.markUncertain(
-        receiptId,
-        attempt.id,
-        this.errorCode(error),
-        this.errorMessage(error),
-      );
+      // A database/write failure after the send phase began must still enter
+      // the normal 15s/60s/5m verification path. Marking it uncertain here
+      // would skip the evidence checks even though the draft ID is durable.
+      await this.enqueueVerification(receiptId, attempt.id, 0, "SEND");
     }
   }
 
@@ -694,7 +704,7 @@ export class MailProcessorService {
     ]);
   }
 
-  private async deferForAuthorization(
+  private async deferUnsent(
     receiptId: string,
     attemptId: string,
     draftId: string | undefined,

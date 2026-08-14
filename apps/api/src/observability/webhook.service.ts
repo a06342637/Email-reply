@@ -15,6 +15,18 @@ export class WebhookService {
       where: { id: outboxId },
     });
     if (!outbox || outbox.kind !== "WEBHOOK") return;
+    const claimedAt = new Date();
+    const claimed = await this.prisma.transactionalOutbox.updateMany({
+      where: { id: outbox.id, availableAt: { lte: claimedAt } },
+      data: {
+        // This database lease also covers the app's direct-delivery fallback,
+        // preventing it from racing the BullMQ Worker during recovery.
+        availableAt: new Date(claimedAt.getTime() + 60_000),
+        publishedAt: claimedAt,
+      },
+    });
+    if (!claimed.count)
+      throw new Error("Webhook delivery is already in progress");
     const payloadRef = outbox.payload as {
       event: string;
       alertId: string;
@@ -32,6 +44,32 @@ export class WebhookService {
     const endpoints = await this.prisma.webhookEndpoint.findMany({
       where: { enabled: true },
     });
+    if (!payloadRef.endpointId) {
+      const targets = endpoints.filter((endpoint) =>
+        this.acceptsEvent(endpoint.eventTypes, payloadRef.event),
+      );
+      await this.prisma.$transaction(async (tx) => {
+        for (const endpoint of targets) {
+          const dedupeKey = `webhook-delivery:${outbox.id}:${endpoint.id}`;
+          await tx.transactionalOutbox.upsert({
+            where: { dedupeKey },
+            create: {
+              kind: "WEBHOOK",
+              aggregateId: alert.id,
+              dedupeKey,
+              payload: {
+                event: payloadRef.event,
+                alertId: alert.id,
+                endpointId: endpoint.id,
+              },
+            },
+            update: {},
+          });
+        }
+        await tx.transactionalOutbox.deleteMany({ where: { id: outbox.id } });
+      });
+      return;
+    }
     if (payloadRef.endpointId) {
       const endpointExists = endpoints.some(
         (endpoint) => endpoint.id === payloadRef.endpointId,
@@ -57,15 +95,7 @@ export class WebhookService {
     for (const endpoint of endpoints) {
       if (payloadRef.endpointId && payloadRef.endpointId !== endpoint.id)
         continue;
-      const events = Array.isArray(endpoint.eventTypes)
-        ? (endpoint.eventTypes as string[])
-        : [];
-      if (
-        events.length &&
-        !events.includes("*") &&
-        !events.includes(payloadRef.event)
-      )
-        continue;
+      if (!this.acceptsEvent(endpoint.eventTypes, payloadRef.event)) continue;
       const secret = await this.crypto.decryptString(
         endpoint.secretEncrypted,
         `webhook:${endpoint.id}`,
@@ -100,5 +130,10 @@ export class WebhookService {
     await this.prisma.transactionalOutbox
       .delete({ where: { id: outboxId } })
       .catch(() => undefined);
+  }
+
+  private acceptsEvent(eventTypes: unknown, event: string): boolean {
+    const events = Array.isArray(eventTypes) ? (eventTypes as string[]) : [];
+    return !events.length || events.includes("*") || events.includes(event);
   }
 }

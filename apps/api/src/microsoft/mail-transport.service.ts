@@ -265,7 +265,10 @@ export class MailTransportService {
           contentBytes: Buffer.from(asset.data).toString("base64"),
         }),
       },
-      { maxRetries: 1, expected: [201] },
+      // Attachment creation is not idempotent. If the response is lost, the
+      // processor verifies the draft and lists existing attachments before
+      // retrying, which avoids adding the same file twice.
+      { maxRetries: 0, expected: [201] },
     );
   }
 
@@ -294,7 +297,7 @@ export class MailTransportService {
           },
         }),
       },
-      { maxRetries: 1, expected: [200, 201] },
+      { maxRetries: 0, expected: [200, 201] },
     );
     const bytes = Buffer.from(asset.data);
     const chunkSize = 3_276_800;
@@ -357,7 +360,7 @@ export class MailTransportService {
           instanceId,
         }),
       },
-      { maxRetries: 1, expected: [201] },
+      { maxRetries: 0, expected: [201] },
     );
   }
 

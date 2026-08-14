@@ -316,6 +316,7 @@ model TransactionalOutbox {
   createdAt   DateTime   @default(now())
 
   @@index([publishedAt, availableAt])
+  @@index([aggregateId, kind])
 }
 
 model ProcessingLog {

@@ -104,5 +104,9 @@ describe("MailTransportService", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[1]?.[1]).toContain("/attachments");
+    expect(request.mock.calls[1]?.[3]).toEqual({
+      maxRetries: 0,
+      expected: [201],
+    });
   });
 });

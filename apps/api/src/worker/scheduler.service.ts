@@ -156,23 +156,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.auditLog.deleteMany({
       where: { occurredAt: { lt: cutoff(values.get("auditLogDays") || 180) } },
     });
-    const expiredReceipts = await this.prisma.messageReceipt.findMany({
+    const dedupeCutoff = cutoff(values.get("dedupeDays") || 365);
+    await this.prisma.$executeRaw`
+      DELETE FROM "TransactionalOutbox" AS outbox
+      USING "MessageReceipt" AS receipt
+      WHERE outbox."aggregateId" = receipt."id"
+        AND receipt."createdAt" < ${dedupeCutoff}
+        AND receipt."state" IN ('SENT', 'FAILED_CONFIRMED', 'UNCERTAIN', 'FILTERED')
+    `;
+    await this.prisma.messageReceipt.deleteMany({
       where: {
-        createdAt: { lt: cutoff(values.get("dedupeDays") || 365) },
+        createdAt: { lt: dedupeCutoff },
         state: { in: ["SENT", "FAILED_CONFIRMED", "UNCERTAIN", "FILTERED"] },
       },
-      select: { id: true },
-      take: 50_000,
     });
-    if (expiredReceipts.length) {
-      const ids = expiredReceipts.map((item) => item.id);
-      await this.prisma.transactionalOutbox.deleteMany({
-        where: { aggregateId: { in: ids } },
-      });
-      await this.prisma.messageReceipt.deleteMany({
-        where: { id: { in: ids } },
-      });
-    }
     const expiredAt = new Date();
     await this.prisma.adminSession.deleteMany({
       where: {
@@ -185,22 +182,28 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.oAuthState.deleteMany({
       where: { expiresAt: { lt: expiredAt } },
     });
-    const terminalReceipts = await this.prisma.messageReceipt.findMany({
-      where: {
-        state: { in: ["SENT", "FAILED_CONFIRMED", "UNCERTAIN", "FILTERED"] },
-      },
-      select: { id: true },
-      take: 50_000,
-    });
-    await this.prisma.transactionalOutbox.deleteMany({
-      where: {
-        publishedAt: { lt: cutoff(7) },
-        OR: [
-          { kind: { not: "VERIFY_SEND" } },
-          { aggregateId: { in: terminalReceipts.map((item) => item.id) } },
-        ],
-      },
-    });
+    const staleOutboxCutoff = cutoff(7);
+    await this.prisma.$executeRaw`
+      DELETE FROM "TransactionalOutbox" AS outbox
+      WHERE outbox."publishedAt" < ${staleOutboxCutoff}
+        AND (
+          outbox."kind" = 'WEBHOOK'
+          OR (
+            outbox."kind" IN ('PROCESS_MESSAGE', 'VERIFY_SEND')
+            AND (
+              NOT EXISTS (
+                SELECT 1 FROM "MessageReceipt" AS receipt
+                WHERE receipt."id" = outbox."aggregateId"
+              )
+              OR EXISTS (
+                SELECT 1 FROM "MessageReceipt" AS receipt
+                WHERE receipt."id" = outbox."aggregateId"
+                  AND receipt."state" IN ('SENT', 'FAILED_CONFIRMED', 'UNCERTAIN', 'FILTERED')
+              )
+            )
+          )
+        )
+    `;
   }
 
   private async checkSecretExpiry(): Promise<void> {
@@ -213,10 +216,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       await this.alerts.resolve("microsoft-secret:expired");
       return;
     }
-    const days = Math.ceil(
-      (app.secretExpiresAt.getTime() - Date.now()) / 86_400_000,
-    );
-    if (days < 0) {
+    const remainingMs = app.secretExpiresAt.getTime() - Date.now();
+    const days = Math.ceil(remainingMs / 86_400_000);
+    if (remainingMs <= 0) {
       await this.alerts.open({
         fingerprint: "microsoft-secret:expired",
         type: "CLIENT_SECRET_EXPIRED",
@@ -226,7 +228,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           "请立即在 Microsoft Entra 应用注册中创建新 Secret，并在系统设置中替换。",
         metadata: { expiresAt: app.secretExpiresAt.toISOString(), days },
       });
-    } else await this.alerts.resolve("microsoft-secret:expired");
+      for (const threshold of [30, 7, 1])
+        await this.alerts.resolve(`microsoft-secret:${threshold}`);
+      return;
+    }
+    await this.alerts.resolve("microsoft-secret:expired");
     const thresholds = [30, 7, 1];
     for (const threshold of thresholds) {
       const fingerprint = `microsoft-secret:${threshold}`;

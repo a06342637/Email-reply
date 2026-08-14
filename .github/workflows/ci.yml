@@ -95,6 +95,10 @@ jobs:
           curl -fsS http://127.0.0.1:18080/health/ready
           test "$(docker compose exec -T app autoreply admin show-username)" = "ci_admin"
           docker compose exec -T app autoreply doctor
+          index_count=$(docker compose exec -T postgres psql -U autoreply -d autoreply -Atc "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'TransactionalOutbox_aggregateId_kind_idx'")
+          maintenance_failures=$(docker compose exec -T postgres psql -U autoreply -d autoreply -Atc "SELECT count(*) FROM \"SystemLog\" WHERE \"event\" = 'MAINTENANCE_FAILED'")
+          test "$index_count" = "1"
+          test "$maintenance_failures" = "0"
       - name: Show container state
         if: always()
         run: |

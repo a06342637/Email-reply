@@ -93,6 +93,19 @@ export class WorkerRunnerService implements OnModuleInit, OnModuleDestroy {
         await this.deferInactiveTask(job);
         return;
       }
+      if (receipt.state !== "QUEUED") {
+        await this.outbox.recoverInterruptedReceipt(
+          receipt.id,
+          job.data.outboxId ? String(job.data.outboxId) : undefined,
+        );
+        if (job.data.outboxId)
+          await this.outbox.acknowledge(
+            String(job.data.outboxId),
+            "PROCESS_MESSAGE",
+            receipt.id,
+          );
+        return;
+      }
       const lockKey = `lock:send:${receipt.mailboxId}`;
       const lockValue = `${job.id}:${Date.now()}`;
       const lockTtlMs = 900_000;
