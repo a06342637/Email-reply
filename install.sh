@@ -89,7 +89,7 @@ NODE_ENV=production
 APP_VERSION=$APP_VERSION
 APP_HOST=0.0.0.0
 APP_PORT=3000
-HOST_BIND=127.0.0.1
+HOST_BIND=0.0.0.0
 HOST_PORT=$HOST_PORT
 PUBLIC_URL=$PUBLIC_URL
 DATABASE_URL=postgresql://autoreply:$POSTGRES_PASSWORD@postgres:5432/autoreply?schema=public
@@ -99,7 +99,7 @@ POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 REDIS_URL=redis://redis:6379
 INSTANCE_KEY=$INSTANCE_KEY
 SESSION_SECRET=$SESSION_SECRET
-TRUST_PROXY=1
+TRUST_PROXY=0
 TZ=Asia/Shanghai
 LOG_LEVEL=info
 BOOTSTRAP_FILE=/bootstrap/admin.json
@@ -129,8 +129,16 @@ if ! curl -fsS "http://127.0.0.1:$HOST_PORT/health/ready" >/dev/null 2>&1; then
 fi
 
 echo ""
-echo "安装完成：http://127.0.0.1:$HOST_PORT"
+SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+echo "安装完成："
+if [[ -n "$SERVER_IP" ]]; then
+  echo "IP 访问：http://$SERVER_IP:$HOST_PORT"
+else
+  echo "IP 访问：http://服务器IP:$HOST_PORT"
+fi
+echo "本机健康检查：http://127.0.0.1:$HOST_PORT/health/ready"
 [[ -n "$PUBLIC_URL" ]] && echo "公开地址：$PUBLIC_URL"
+echo "提示：IP 直连使用明文 HTTP；Microsoft/Google OAuth 仍需要 HTTPS 域名。"
 if [[ "$RANDOM_USERNAME" == true || "$RANDOM_PASSWORD" == true ]]; then
   echo ""
   echo "随机管理员凭据（也会在 app 首次日志中仅显示一次）："

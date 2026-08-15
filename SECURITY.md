@@ -5,5 +5,8 @@
 - 管理员密码使用 Argon2id；会话使用 Secure/HttpOnly/SameSite Cookie 与 CSRF Token。
 - 备份口令不保存，忘记后无法恢复。
 - 请将 `.env` 权限保持为 `0600`，不得提交到版本库。
-- 生产环境必须通过受信任反向代理提供 HTTPS，并限制只有反向代理能访问本地 `127.0.0.1:8080`。
+- v0.04 起 app 默认绑定宿主机 `0.0.0.0:8080`，便于首次安装后通过服务器 IP 和端口访问。该入口是明文 HTTP，请使用主机防火墙或云安全组限制可信来源，并尽快配置 HTTPS。
+- IP 直连模式默认设置 `TRUST_PROXY=0`，不得在 8080 仍直接暴露公网时盲目信任客户端提交的转发 IP 请求头。
+- Microsoft 与 Google OAuth 回调必须使用受信任的 HTTPS 域名，不能使用普通 HTTP IP 地址。
+- 配置 Nginx、Caddy 或宝塔反向代理后，建议在 `.env` 中将 `HOST_BIND` 改为 `127.0.0.1`、将 `TRUST_PROXY` 改为 `1`，然后重建 app 容器，使 8080 只供本机反向代理访问。
 - 若怀疑实例主密钥泄漏，应立即撤销 Microsoft 与 Google 应用许可、轮换 Client Secret 和 Webhook Secret，并重建实例。

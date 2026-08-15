@@ -7,7 +7,7 @@ x-app-common: &app-common
     dockerfile: Dockerfile
     target: runtime
     args:
-      APP_VERSION: ${APP_VERSION:-0.03}
+      APP_VERSION: ${APP_VERSION:-0.04}
   env_file:
     - .env
   depends_on:
@@ -70,7 +70,7 @@ services:
     volumes:
       - bootstrap_data:/bootstrap
     ports:
-      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-8080}:3000"
+      - "${HOST_BIND:-0.0.0.0}:${HOST_PORT:-8080}:3000"
     healthcheck:
       test:
         [

@@ -1,6 +1,6 @@
 # MailPilot — Microsoft 与 Gmail 邮箱自动回复系统
 
-当前版本：**v0.03**
+当前版本：**v0.04**
 
 [![CI](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml)
 
@@ -8,12 +8,12 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 
 系统不使用 IMAP/SMTP，不保存邮箱密码。收件、发件和 OAuth 都通过 HTTPS 访问 Microsoft 或 Google 官方 API，因此服务器无需开放 993、465 或 587 端口。
 
-> v0.03 已完成代码级、类型、构建、自动化测试和本地 UI 冒烟测试。正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据、测试邮箱和 Debian 服务器完成本文末尾的真实环境验收。
+> v0.04 已完成代码级、类型、构建、自动化测试和本地 UI 冒烟测试。正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据、测试邮箱和 Debian 服务器完成本文末尾的真实环境验收。
 
 ## 目录
 
 - [主要功能](#主要功能)
-- [v0.03 支持范围](#v003-支持范围)
+- [v0.04 支持范围](#v004-支持范围)
 - [系统架构](#系统架构)
 - [网络与服务器要求](#网络与服务器要求)
 - [Debian 一键安装](#debian-一键安装)
@@ -61,7 +61,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - 支持 Argon2id + XChaCha20-Poly1305 加密备份与跨服务器恢复。
 - 提供 Debian 安装脚本、改密 CLI、健康检查和升级回滚脚本。
 
-## v0.03 支持范围
+## v0.04 支持范围
 
 支持：
 
@@ -104,7 +104,7 @@ Docker Compose 包含：
 - **postgres**：业务数据、游标、去重、日志、审计和事务 Outbox。
 - **redis**：BullMQ 队列、分布式锁和发送限速，启用 AOF。
 
-PostgreSQL 和 Redis 不映射宿主机公网端口。app 默认只监听宿主机 127.0.0.1:8080。
+PostgreSQL 和 Redis 不映射宿主机公网端口。app 默认监听宿主机 `0.0.0.0:8080`，安装后可直接通过服务器 IP 和端口访问后台。
 
 ## 网络与服务器要求
 
@@ -114,15 +114,14 @@ PostgreSQL 和 Redis 不映射宿主机公网端口。app 默认只监听宿主�
 - 2 核 CPU。
 - 2 GB 内存起步，推荐 4 GB。
 - 至少 10 GB 可用磁盘空间。
-- 一个解析到服务器公网 IP 的域名。
-- 可用的 HTTPS 证书。
+- 如需使用 Microsoft/Google OAuth 网页授权，需要一个解析到服务器公网 IP 的域名和可用的 HTTPS 证书。
 
 入站端口：
 
 - 22：SSH，仅开放给可信 IP 更安全。
 - 80：申请证书和 HTTP 跳转。
 - 443：后台、Microsoft OAuth 和 Google OAuth 回调。
-- 8080：默认只绑定 127.0.0.1，不要直接开放公网。
+- 8080：默认绑定 `0.0.0.0`，可通过 `http://服务器IP:8080` 访问；建议使用主机防火墙或云安全组限制可信来源。
 
 出站要求：
 
@@ -184,6 +183,16 @@ sudo ./install.sh
 
 安装脚本检测到已有 .env 时会停止，避免覆盖数据库密码和实例主密钥。升级已有实例请使用 update.sh。
 
+安装完成后可直接打开：
+
+```text
+http://服务器公网IP:8080
+```
+
+例如服务器 IP 为 `168.110.210.195` 时，访问 `http://168.110.210.195:8080`。IP 直连是明文 HTTP，只适合首次配置、临时使用或已由防火墙限制来源的环境；Microsoft/Google OAuth 网页授权仍必须配置 HTTPS 域名。
+
+IP 直连模式默认使用 `PUBLIC_URL=` 和 `TRUST_PROXY=0`。不要在 8080 仍直接暴露公网时把 `TRUST_PROXY` 改为 `1`，否则客户端可伪造转发 IP 请求头。
+
 ### 3. 检查运行状态
 
 ```bash
@@ -202,9 +211,23 @@ curl -fsS http://127.0.0.1:8080/health/ready
 
 ## 配置域名和 HTTPS
 
-Microsoft 与 Google OAuth 回调都必须使用可从浏览器访问的 HTTPS 域名。生产环境不要直接通过 http://服务器IP:8080 使用后台。
+Microsoft 与 Google OAuth 回调都必须使用可从浏览器访问的 HTTPS 域名。后台虽然可直接通过 `http://服务器IP:8080` 打开，但生产环境建议改用 HTTPS 域名。
 
 下面以 Nginx 和域名 mail.example.com 为例。
+
+反向代理启用后修改 `.env`：
+
+```dotenv
+HOST_BIND=127.0.0.1
+PUBLIC_URL=https://mail.example.com
+TRUST_PROXY=1
+```
+
+然后重建 app 容器：
+
+```bash
+docker compose up -d --force-recreate app
+```
 
 ### 1. 配置 DNS
 
@@ -1316,7 +1339,8 @@ docker compose up -d
 ## 安全建议
 
 - 生产环境必须使用 HTTPS。
-- app 端口只绑定 127.0.0.1。
+- 默认 `0.0.0.0:8080` 便于 IP 直连，但属于明文 HTTP；请用防火墙或云安全组限制来源。
+- 配置反向代理后，建议将 `.env` 中 `HOST_BIND` 改为 `127.0.0.1`、`TRUST_PROXY` 改为 `1`，再运行 `docker compose up -d --force-recreate app`。
 - 不要对公网开放 PostgreSQL 和 Redis。
 - .env 权限保持 0600。
 - 不要将 .env、备份、Token 或 Secret 提交到 Git。
@@ -1537,6 +1561,7 @@ API 使用统一请求 ID、错误码和脱敏错误结构。
 v0.01
 v0.02
 v0.03
+v0.04
 ...
 ```
 
