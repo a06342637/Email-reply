@@ -176,6 +176,47 @@ describe("MicrosoftService", () => {
     expect(prisma.mailbox.upsert).not.toHaveBeenCalled();
   });
 
+  it("reports an actionable error for a Refresh Token without Microsoft Graph consent", async () => {
+    const prisma = {
+      mailbox: {
+        findUnique: vi.fn(),
+        count: vi.fn(),
+        upsert: vi.fn(),
+      },
+    };
+    const graph = {
+      exchangeImportedRefreshToken: vi
+        .fn()
+        .mockRejectedValue(
+          new GraphError(
+            400,
+            "invalid_grant",
+            "The request was denied because one or more scopes requested are unauthorized or expired. The user must first sign in and grant the client application access to the requested scope.",
+          ),
+        ),
+    };
+    const service = new MicrosoftService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      graph as never,
+      {} as never,
+    );
+
+    await expect(
+      service.importRefreshToken({
+        clientId: "11111111-1111-4111-8111-111111111111",
+        refreshToken: "legacy-outlook-refresh-token",
+      }),
+    ).rejects.toMatchObject({
+      code: "MICROSOFT_GRAPH_SCOPES_REQUIRED",
+      details: {
+        requiredScopes: ["User.Read", "Mail.ReadWrite", "Mail.Send"],
+      },
+    });
+    expect(prisma.mailbox.upsert).not.toHaveBeenCalled();
+  });
+
   it("does not write a mailbox when Graph folder access validation fails", async () => {
     const prisma = {
       mailbox: {

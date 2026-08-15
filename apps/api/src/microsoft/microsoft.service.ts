@@ -404,6 +404,18 @@ export class MicrosoftService {
       if (error instanceof GraphError) {
         if (
           [400, 401].includes(error.status) &&
+          /one or more scopes requested are unauthorized|must first sign in and grant/i.test(
+            `${error.code} ${error.message}`,
+          )
+        )
+          throw new AppError(
+            "MICROSOFT_GRAPH_SCOPES_REQUIRED",
+            "Refresh Token 未授予 Microsoft Graph 的 User.Read、Mail.ReadWrite 和 Mail.Send，请重新授权并生成新的 Refresh Token",
+            400,
+            { requiredScopes: ["User.Read", "Mail.ReadWrite", "Mail.Send"] },
+          );
+        if (
+          [400, 401].includes(error.status) &&
           /invalid_grant|invalid_client|unauthorized_client|interaction_required|consent_required/i.test(
             `${error.code} ${error.message}`,
           )

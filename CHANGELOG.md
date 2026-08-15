@@ -7,6 +7,7 @@
 - 修复 Microsoft 模板测试发送时向 Graph JSON 草稿写入非 `X-` 自定义邮件头而被拒绝的问题。
 - 修复 Microsoft Graph 要求 Open Extension 展开必须带过滤条件，导致已发送状态核验失败的问题；核验现在直接使用持久化的实例追踪邮件头。
 - 已发送状态改为事务条件认领，并发核验只允许一次状态落库和一条成功日志，同时继续保证不会重复发送邮件。
+- Client ID + Refresh Token 导入现在会单独识别缺少 Microsoft Graph 授权的旧 Outlook Token，并提示重新授予 `User.Read`、`Mail.ReadWrite`、`Mail.Send`。
 - 增加无附件快速路径和附件恢复查询字段回归测试，防止同类 OData 查询兼容性问题再次出现。
 
 ## v0.05 - 2026-08-15
