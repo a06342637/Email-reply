@@ -33,7 +33,7 @@ export function normalizePublicUrl(value: string): string {
 @Injectable()
 export class AppConfig {
   readonly nodeEnv = process.env.NODE_ENV ?? "development";
-  readonly version = process.env.APP_VERSION ?? "0.09";
+  readonly version = process.env.APP_VERSION ?? "0.10";
   readonly host = process.env.APP_HOST ?? "0.0.0.0";
   readonly port = integer("APP_PORT", 3000);
   readonly databaseUrl = process.env.DATABASE_URL ?? "";

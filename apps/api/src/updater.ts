@@ -701,6 +701,8 @@ async function scheduleUpdaterRefresh(): Promise<void> {
     "/workspace",
     "-e",
     `APP_VERSION=${readCurrentVersion()}`,
+    "-e",
+    `UPDATER_APP_VERSION=${readCurrentVersion()}`,
     "microsoft-mail-autoreply-updater:local",
     "sh",
     "-lc",

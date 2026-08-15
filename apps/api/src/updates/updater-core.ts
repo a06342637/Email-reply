@@ -78,7 +78,12 @@ export function composeVersionEnvironment(
   version: string,
   extra: Record<string, string | undefined> = {},
 ): Record<string, string | undefined> {
-  return { ...extra, APP_VERSION: version };
+  return {
+    ...extra,
+    APP_VERSION: version,
+    BUILD_APP_VERSION: version,
+    UPDATER_APP_VERSION: version,
+  };
 }
 
 export function sanitizeUpdaterLog(value: string): string {

@@ -57,8 +57,10 @@ describe("updater safety helpers", () => {
         AUTOREPLY_IMAGE: "rollback-image",
       }),
     ).toEqual({
-      APP_VERSION: "0.09",
       AUTOREPLY_IMAGE: "rollback-image",
+      APP_VERSION: "0.09",
+      BUILD_APP_VERSION: "0.09",
+      UPDATER_APP_VERSION: "0.09",
     });
   });
 
