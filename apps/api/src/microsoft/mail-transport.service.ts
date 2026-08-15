@@ -374,7 +374,6 @@ export class MailTransportService {
 
   private trackingHeaders(trackingId: string, instanceId: string) {
     return [
-      { name: "Auto-Submitted", value: "auto-replied" },
       { name: "X-Auto-Response-Suppress", value: "All" },
       { name: "X-AutoReply-Tracking", value: trackingId },
       { name: "X-AutoReply-Instance", value: instanceId },

@@ -77,6 +77,33 @@ describe("MailTransportService", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("uses only Graph-supported custom headers for JSON test drafts", async () => {
+    const request = vi.fn().mockResolvedValue({ id: "draft-1" });
+    const service = new MailTransportService({ request } as never);
+
+    await service.createTestDraft({
+      mailboxId: "mailbox-1",
+      recipient: "recipient@example.net",
+      subject: "模板测试",
+      html: "<p>测试</p>",
+      trackingId: "test-tracking-1",
+      instanceId: "instance-1",
+    });
+
+    const body = JSON.parse(String(request.mock.calls[0]?.[2]?.body)) as {
+      internetMessageHeaders: Array<{ name: string; value: string }>;
+    };
+    expect(
+      body.internetMessageHeaders.every((header) =>
+        header.name.toLowerCase().startsWith("x-"),
+      ),
+    ).toBe(true);
+    expect(body.internetMessageHeaders).toContainEqual({
+      name: "X-AutoReply-Tracking",
+      value: "test-tracking-1",
+    });
+  });
+
   it("matches existing duplicate attachments by count during recovery", async () => {
     const request = vi
       .fn()
