@@ -531,21 +531,25 @@ export class MailProcessorService {
       },
     });
     const now = new Date();
-    await this.prisma.$transaction([
-      this.prisma.replyAttempt.update({
-        where: { id: attemptId },
-        data: { state: "SENT", draftInternetId: internetId, verifiedAt: now },
-      }),
-      this.prisma.messageReceipt.update({
-        where: { id: receiptId },
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.messageReceipt.updateMany({
+        where: {
+          id: receiptId,
+          state: { notIn: ["SENT", "FAILED_CONFIRMED", "UNCERTAIN"] },
+        },
         data: {
           state: "SENT",
           completedAt: now,
           lastErrorCode: null,
           lastErrorMessage: null,
         },
-      }),
-      this.prisma.processingLog.create({
+      });
+      if (!updated.count) return false;
+      await tx.replyAttempt.update({
+        where: { id: attemptId },
+        data: { state: "SENT", draftInternetId: internetId, verifiedAt: now },
+      });
+      await tx.processingLog.create({
         data: {
           mailboxId: receipt.mailboxId,
           mailboxEmail: receipt.mailbox.email,
@@ -558,8 +562,10 @@ export class MailProcessorService {
           templateName: receipt.templateRevision?.template.name,
           status: "SENT",
         },
-      }),
-    ]);
+      });
+      return true;
+    });
+    if (!claimed) return;
     await this.alerts.resolve(`send:${receiptId}`);
   }
 

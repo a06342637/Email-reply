@@ -35,11 +35,14 @@ function fixture(findResults: unknown[], render: () => Promise<unknown>) {
     replyAttempt: {
       count: vi.fn().mockResolvedValue(0),
       create: vi.fn().mockResolvedValue({ id: "attempt-1" }),
+      update: vi.fn().mockResolvedValue({}),
     },
+    processingLog: { create: vi.fn().mockResolvedValue({}) },
   };
   const prisma = {
     messageReceipt: {
       findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
       update: vi.fn().mockResolvedValue({}),
     },
     replyAttempt: {
@@ -66,15 +69,16 @@ function fixture(findResults: unknown[], render: () => Promise<unknown>) {
     findDraftByTracking: vi.fn(),
     findSentByTracking: vi.fn(),
   };
+  const alerts = { resolve: vi.fn(), open: vi.fn() };
   const service = new MailProcessorService(
     prisma as never,
     { timezone: "Asia/Shanghai" } as never,
     templates as never,
     transport as never,
-    { resolve: vi.fn(), open: vi.fn() } as never,
+    alerts as never,
     { assertOpen: vi.fn().mockResolvedValue(undefined) } as never,
   );
-  return { service, prisma, templates, transport };
+  return { service, prisma, templates, transport, alerts, tx };
 }
 
 describe("MailProcessorService", () => {
@@ -286,5 +290,29 @@ describe("MailProcessorService", () => {
       }),
     );
     expect(prisma.transactionalOutbox.upsert).not.toHaveBeenCalled();
+  });
+
+  it("writes the sent state and processing log only once across duplicate verifications", async () => {
+    const { service, prisma, alerts, tx } = fixture([], async () => ({}));
+    prisma.messageReceipt.findUniqueOrThrow.mockResolvedValue(baseReceipt);
+    tx.messageReceipt.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    const markSent = (
+      service as unknown as {
+        markSent: (
+          receiptId: string,
+          attemptId: string,
+          internetId?: string,
+        ) => Promise<void>;
+      }
+    ).markSent.bind(service);
+
+    await markSent(baseReceipt.id, "attempt-1", "<sent@example.com>");
+    await markSent(baseReceipt.id, "attempt-1", "<sent@example.com>");
+
+    expect(tx.replyAttempt.update).toHaveBeenCalledTimes(1);
+    expect(tx.processingLog.create).toHaveBeenCalledTimes(1);
+    expect(alerts.resolve).toHaveBeenCalledTimes(1);
   });
 });
