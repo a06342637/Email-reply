@@ -5,7 +5,7 @@
 - 邮箱密码从不进入系统。
 - 管理员密码使用 Argon2id；会话使用 Secure/HttpOnly/SameSite Cookie 与 CSRF Token。
 - 备份口令不保存，忘记后无法恢复。
-- v0.07 的 updater 是唯一挂载 Docker Socket 的容器，不映射宿主机端口，并与 worker 隔离在不同 Docker 网络。Docker Socket 等同宿主机高权限，请勿自行把 updater 端口发布到公网，也不要把 `UPDATER_TOKEN` 提供给第三方。
+- v0.07 及以后的 updater 是唯一挂载 Docker Socket 的容器，不映射宿主机端口，并与 worker 隔离在不同 Docker 网络。Docker Socket 等同宿主机高权限，请勿自行把 updater 端口发布到公网，也不要把 `UPDATER_TOKEN` 提供给第三方。
 - 在线升级只接受固定官方仓库 main 分支上的正式版本标签，并拒绝脏工作区、分支错误、标签与 VERSION 不一致、非快进和降级操作。升级前备份口令只在任务内存中使用。
 - 请将 `.env` 权限保持为 `0600`，不得提交到版本库。
 - v0.04 起 app 默认绑定宿主机 `0.0.0.0:8080`，便于首次安装后通过服务器 IP 和端口访问。该入口是明文 HTTP，请使用主机防火墙或云安全组限制可信来源，并尽快配置 HTTPS。
