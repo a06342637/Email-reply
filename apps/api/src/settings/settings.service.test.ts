@@ -23,6 +23,18 @@ function serviceFixture() {
 }
 
 describe("SettingsService", () => {
+  it("returns defaults for all four visible log and alert retention periods", async () => {
+    const { service } = serviceFixture();
+
+    await expect(service.get()).resolves.toMatchObject({
+      processingLogDays: 30,
+      systemLogDays: 30,
+      alertLogDays: 30,
+      auditLogDays: 180,
+      dedupeDays: 365,
+    });
+  });
+
   it("validates the complete payload before writing any setting", async () => {
     const { service, prisma, upsert } = serviceFixture();
 

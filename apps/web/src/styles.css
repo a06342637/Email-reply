@@ -1374,6 +1374,48 @@ td small {
   flex-wrap: wrap;
   gap: 6px;
 }
+.provider-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.provider-setup-grid section {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface-2);
+}
+.provider-setup-grid strong {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 13px;
+}
+.provider-setup-grid p,
+.permission-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.provider-setup-grid b {
+  color: var(--text);
+}
+.permission-help {
+  margin-top: 10px;
+}
+.callback-path {
+  display: block;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .security-row {
   display: flex;
   justify-content: space-between;
@@ -1889,6 +1931,9 @@ td small {
     display: none;
   }
   .provider-permissions {
+    grid-template-columns: 1fr;
+  }
+  .provider-setup-grid {
     grid-template-columns: 1fr;
   }
   .auth-method-grid {

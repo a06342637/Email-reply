@@ -1,5 +1,14 @@
 # 更新日志
 
+## v0.12 - 2026-08-16
+
+- 系统设置新增“告警记录”独立保留周期；处理日志、系统日志、已恢复告警和审计日志现在可分别配置 1–3650 天，Worker 每天自动删除超期记录。
+- 告警清理仅删除已经恢复的历史记录，未处理和已确认的活动告警始终保留；同时清理对应 Webhook Outbox，避免残留投递任务。
+- “系统设置 → Microsoft”与“添加 Microsoft 邮箱”弹窗新增完整 Entra 配置清单，明确账户类型、Web 回调、六项委托范围、管理员同意、Client Secret Value，以及禁止选择应用程序权限。
+- Client ID + Refresh Token 导入说明新增公共客户端、同一 Client ID、`offline_access` 和 Graph 委托权限要求，并明确 Secret 型 confidential client 应改用 OAuth 网页登录。
+- “系统设置 → Google / Gmail”与新增的 Gmail 连接说明弹窗补充 Gmail API、OAuth 同意屏幕、External/Internal、Test users、Web 客户端、回调地址、受限权限和 Testing Token 有效期说明。
+- README、UI 冒烟数据和自动化测试同步更新；版本升级为 v0.12（npm 0.0.12）。
+
 ## v0.11 - 2026-08-16
 
 - 修复 Buildx 在只读 updater 容器中首次创建 `/root/.docker` 失败的问题；Docker 配置和 Buildx 状态现在固定写入 `/tmp/docker` 内存盘。

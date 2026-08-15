@@ -31,6 +31,7 @@ export class UpdateSettingsDto {
   @IsOptional() @IsInt() @Min(1) @Max(25) attachmentLimitMb?: number;
   @IsOptional() @IsInt() @Min(1) @Max(3650) processingLogDays?: number;
   @IsOptional() @IsInt() @Min(1) @Max(3650) systemLogDays?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(3650) alertLogDays?: number;
   @IsOptional() @IsInt() @Min(1) @Max(3650) auditLogDays?: number;
   @IsOptional() @IsInt() @Min(1) @Max(3650) dedupeDays?: number;
   @IsOptional() @IsInt() @Min(5) @Max(1440) sessionIdleMinutes?: number;

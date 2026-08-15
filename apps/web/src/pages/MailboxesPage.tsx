@@ -27,6 +27,7 @@ export function MailboxesPage() {
   const { notify } = useApp();
   const [data, setData] = useState<Mailbox[]>();
   const [microsoftDialog, setMicrosoftDialog] = useState(false);
+  const [googleDialog, setGoogleDialog] = useState(false);
   const [refreshImport, setRefreshImport] = useState({
     clientId: "",
     refreshToken: "",
@@ -68,6 +69,12 @@ export function MailboxesPage() {
     if (importing) return;
     setMicrosoftDialog(false);
     setRefreshImport({ clientId: "", refreshToken: "" });
+  }
+  function openGoogle() {
+    setGoogleDialog(true);
+  }
+  function closeGoogle() {
+    setGoogleDialog(false);
   }
   async function importMicrosoftRefreshToken(event: React.FormEvent) {
     event.preventDefault();
@@ -118,7 +125,7 @@ export function MailboxesPage() {
               <MailPlus size={18} />
               添加 Microsoft
             </button>
-            <button onClick={() => connectOAuth("google")}>
+            <button onClick={openGoogle}>
               <MailPlus size={18} />
               连接 Gmail
             </button>
@@ -131,8 +138,8 @@ export function MailboxesPage() {
           <div>
             <strong>Microsoft 委托权限</strong>
             <span>
-              OAuth 登录（推荐）或 Client ID + Refresh Token；均验证
-              User.Read、Mail.ReadWrite、Mail.Send
+              Microsoft Graph →
+              委托的权限；openid、profile、offline_access、User.Read、Mail.ReadWrite、Mail.Send，不能选应用程序权限
             </span>
           </div>
         </div>
@@ -140,7 +147,10 @@ export function MailboxesPage() {
           <KeyRound />
           <div>
             <strong>Google OAuth 权限</strong>
-            <span>openid、email、profile、gmail.readonly、gmail.compose</span>
+            <span>
+              先启用 Gmail API；Web OAuth 请求
+              openid、email、profile、gmail.readonly、gmail.compose
+            </span>
           </div>
         </div>
       </div>
@@ -236,9 +246,7 @@ export function MailboxesPage() {
                 {m.status === "AUTH_REQUIRED" && (
                   <button
                     onClick={() =>
-                      m.provider === "GOOGLE"
-                        ? connectOAuth("google")
-                        : openMicrosoft(m)
+                      m.provider === "GOOGLE" ? openGoogle() : openMicrosoft(m)
                     }
                   >
                     <RefreshCw />
@@ -283,7 +291,7 @@ export function MailboxesPage() {
               <button className="primary" onClick={() => openMicrosoft()}>
                 添加 Microsoft
               </button>
-              <button onClick={() => connectOAuth("google")}>连接 Gmail</button>
+              <button onClick={openGoogle}>连接 Gmail</button>
             </div>
           </Empty>
         </Card>
@@ -310,7 +318,24 @@ export function MailboxesPage() {
               <ul>
                 <li>不接触或保存 Microsoft 邮箱密码</li>
                 <li>自动续期，可读取收件箱、垃圾箱并发送普通 Reply</li>
-                <li>需要先在系统设置中配置 Microsoft Client ID 和 Secret</li>
+                <li>
+                  Entra 应用账户类型必须是“任何组织目录中的账户和个人 Microsoft
+                  账户”
+                </li>
+                <li>
+                  身份验证平台必须选择 Web，并登记后台显示的 Microsoft OAuth
+                  回调地址
+                </li>
+                <li>
+                  Microsoft Graph
+                  必须选择“委托的权限”：openid、profile、offline_access、User.Read、Mail.ReadWrite、Mail.Send
+                </li>
+                <li>
+                  不要添加“应用程序权限”；企业策略要求时由租户管理员授予同意
+                </li>
+                <li>
+                  需要先在系统设置中保存对应 Client ID 和 Client Secret Value
+                </li>
               </ul>
               <button
                 className="primary auth-method-submit"
@@ -342,6 +367,15 @@ export function MailboxesPage() {
                 系统先在 Microsoft 官方 Token Endpoint 换取 Access
                 Token，校验委托权限并读取 /me；全部成功后才保存邮箱。
               </p>
+              <ul>
+                <li>Refresh Token 必须由同一个 Client ID 签发</li>
+                <li>
+                  授权必须包含
+                  offline_access、User.Read、Mail.ReadWrite、Mail.Send
+                </li>
+                <li>必须是委托授权，不支持 Microsoft Graph 应用程序权限</li>
+                <li>签发应用必须允许不提交 Client Secret 的公共客户端刷新</li>
+              </ul>
               <label>
                 Client ID
                 <input
@@ -375,8 +409,8 @@ export function MailboxesPage() {
                   spellCheck={false}
                 />
                 <small>
-                  必须包含 User.Read、Mail.ReadWrite、Mail.Send；若该应用要求
-                  Client Secret，则不能使用这种仅两项导入方式。
+                  如果 Token 缺少权限、已撤销、不属于该 Client ID，或刷新时要求
+                  Client Secret，系统会拒绝导入且不会保存半成品邮箱。
                 </small>
               </label>
               <button
@@ -393,6 +427,84 @@ export function MailboxesPage() {
             Refresh Token
             会使用实例主密钥加密保存，后台不会再次显示原文，也不会写入系统日志或审计日志。
           </Notice>
+        </Modal>
+      )}
+      {googleDialog && (
+        <Modal title="连接 Gmail 邮箱" wide onClose={closeGoogle}>
+          <div className="auth-method-grid">
+            <section className="auth-method-card recommended">
+              <div className="auth-method-heading">
+                <div className="auth-method-icon">
+                  <LogIn />
+                </div>
+                <div>
+                  <h3>Google OAuth 网页登录</h3>
+                  <span className="recommended-badge">
+                    <BadgeCheck /> 唯一支持方式
+                  </span>
+                </div>
+              </div>
+              <p>
+                跳转到 Google 官方授权页选择 Gmail 或 Google Workspace
+                账号。系统不接触邮箱密码，并会加密保存用于无人值守续期的 Refresh
+                Token。
+              </p>
+              <ul>
+                <li>Google Cloud 项目必须先启用 Gmail API</li>
+                <li>
+                  OAuth 客户端类型必须是 Web application，并登记后台显示的
+                  Google OAuth 回调地址
+                </li>
+                <li>
+                  个人 Gmail 或组织外账号选择 External；仅 Workspace
+                  组织内部可选择 Internal
+                </li>
+                <li>应用处于 Testing 时，要连接的邮箱必须加入 Test users</li>
+              </ul>
+            </section>
+            <section className="auth-method-card">
+              <div className="auth-method-heading">
+                <div className="auth-method-icon secondary">
+                  <KeyRound />
+                </div>
+                <div>
+                  <h3>需要的 Google 权限</h3>
+                  <span className="method-label">OAuth scopes</span>
+                </div>
+              </div>
+              <ul>
+                <li>openid、email、profile：识别授权账号和显示名称</li>
+                <li>gmail.readonly：检测 History、INBOX/SPAM 标签和邮件头</li>
+                <li>gmail.compose：创建并发送回复草稿、内嵌图片和固定附件</li>
+              </ul>
+              <p>
+                gmail.readonly 与 gmail.compose 属于 Google 受限权限。External
+                应用公开给大量用户前可能需要应用验证和安全评估；External +
+                Testing 的 Refresh Token 通常会在 7 天后失效。
+              </p>
+              <code className="callback-path">
+                https://你的域名/api/v1/google/oauth/callback
+              </code>
+            </section>
+          </div>
+          <Notice>
+            请先在“系统设置 → Google / Gmail”保存 Client ID、Client Secret 和
+            HTTPS 公开地址。Gmail 当前不支持邮箱密码或直接粘贴 Refresh Token
+            导入。
+          </Notice>
+          <div className="modal-actions">
+            <button onClick={closeGoogle}>取消</button>
+            <button
+              className="primary"
+              onClick={() => {
+                closeGoogle();
+                void connectOAuth("google");
+              }}
+            >
+              <LogIn />
+              前往 Google 登录
+            </button>
+          </div>
         </Modal>
       )}
     </>

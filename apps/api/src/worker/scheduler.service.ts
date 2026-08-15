@@ -134,6 +134,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           in: [
             "processingLogDays",
             "systemLogDays",
+            "alertLogDays",
             "auditLogDays",
             "dedupeDays",
           ],
@@ -152,6 +153,21 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     });
     await this.prisma.systemLog.deleteMany({
       where: { occurredAt: { lt: cutoff(values.get("systemLogDays") || 30) } },
+    });
+    const alertCutoff = cutoff(values.get("alertLogDays") || 30);
+    await this.prisma.$executeRaw`
+      DELETE FROM "TransactionalOutbox" AS outbox
+      USING "Alert" AS alert
+      WHERE outbox."aggregateId" = alert."id"
+        AND outbox."kind" = 'WEBHOOK'
+        AND alert."status" = 'RESOLVED'
+        AND alert."lastSeenAt" < ${alertCutoff}
+    `;
+    await this.prisma.alert.deleteMany({
+      where: {
+        status: "RESOLVED",
+        lastSeenAt: { lt: alertCutoff },
+      },
     });
     await this.prisma.auditLog.deleteMany({
       where: { occurredAt: { lt: cutoff(values.get("auditLogDays") || 180) } },

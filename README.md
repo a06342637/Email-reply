@@ -1,6 +1,6 @@
 # MailPilot — Microsoft 与 Gmail 邮箱自动回复系统
 
-当前版本：**v0.11**
+当前版本：**v0.12**
 
 [![CI](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml)
 
@@ -8,12 +8,12 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 
 系统不使用 IMAP/SMTP，不保存邮箱密码。收件、发件和 OAuth 都通过 HTTPS 访问 Microsoft 或 Google 官方 API，因此服务器无需开放 993、465 或 587 端口。
 
-> v0.11 已完成代码级、类型、构建、自动化测试、本地 UI 冒烟测试，以及 Debian ARM64 上连续在线升级和失败自动回滚验证；同时补齐 Buildx、目标版本隔离和只读容器下的 Buildx 状态目录。正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据和测试邮箱完成本文末尾的业务验收。
+> v0.12 新增四类日志/告警独立保留周期与已恢复告警自动清理，并把 Microsoft Entra、Microsoft Refresh Token 和 Google Cloud/Gmail 的完整权限配置步骤直接加入后台。该版本继续通过自动化测试、UI 冒烟、Docker 健康检查和在线升级链路验收；正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据和测试邮箱完成本文末尾的业务验收。
 
 ## 目录
 
 - [主要功能](#主要功能)
-- [v0.11 支持范围](#v011-支持范围)
+- [v0.12 支持范围](#v012-支持范围)
 - [系统架构](#系统架构)
 - [网络与服务器要求](#网络与服务器要求)
 - [Debian 一键安装](#debian-一键安装)
@@ -56,13 +56,13 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - PostgreSQL 事务 Outbox、BullMQ、Redis 锁和发送限速防止丢任务或并发重复发送。
 - 通过草稿 ID、追踪头和已发送邮件核验处理发送超时，避免盲目重发。
 - 管理后台支持暗色、亮色和跟随系统三态主题。
-- 支持处理日志、系统日志、审计日志、告警、CSV/JSON 导出和签名 Webhook。
+- 支持处理日志、系统日志、告警记录、审计日志、独立保留周期、CSV/JSON 导出和签名 Webhook。
 - 仪表盘按邮件发现时间和最终完成时间分别统计最近 24 小时与 7 天数据。
 - 支持 Argon2id + XChaCha20-Poly1305 加密备份与跨服务器恢复。
 - 系统设置内置在线升级：检查正式版本、升级前加密备份、实时进度、健康检查和失败自动回滚。
 - 提供 Debian 安装脚本、改密 CLI、健康检查和命令行升级回滚脚本。
 
-## v0.11 支持范围
+## v0.12 支持范围
 
 支持：
 
@@ -380,6 +380,8 @@ https://mail.example.com/api/v1/microsoft/oauth/callback
 
 **API permissions → Add a permission → Microsoft Graph → Delegated permissions**
 
+在“请求获取 API 权限”窗口中，必须点左侧的 **委托的权限（Delegated permissions）**。不要点右侧的 **应用程序权限（Application permissions）**，本系统不会使用后台服务身份访问所有用户邮箱。
+
 添加：
 
 | 权限           | 用途                         |
@@ -391,9 +393,9 @@ https://mail.example.com/api/v1/microsoft/oauth/callback
 | Mail.ReadWrite | 检测邮件、创建和管理回复草稿 |
 | Mail.Send      | 发送回复邮件                 |
 
-MailPilot 使用的是 **Delegated permissions**，不是 Application permissions。
+MailPilot 使用的是 **Delegated permissions**，不是 Application permissions。后台“系统设置 → Microsoft”和“邮箱账号 → 添加 Microsoft”都会再次展示这份完整权限清单。
 
-企业租户可能禁止用户自行同意。此时需要租户管理员执行 Grant admin consent，或批准用户发起的授权请求。
+“需要管理员同意”列显示“否”不代表企业策略一定允许普通用户自行授权。企业租户可能全局禁止用户同意，此时需要租户管理员执行 **Grant admin consent**，或批准用户发起的授权请求；个人 Outlook/Hotmail 账户没有租户管理员步骤。
 
 ### 4. 创建 Client Secret
 
@@ -431,6 +433,8 @@ MailPilot 使用的是 **Delegated permissions**，不是 Application permission
 保存后 Client Secret 不会再次显示原文，只能替换。
 
 修改这里的 Client ID 只会使使用 **OAuth 网页登录** 的 Microsoft 邮箱进入需要重新授权状态；使用独立 Client ID + Refresh Token 导入的邮箱不受影响。仅替换同一应用的 Client Secret 时，系统会先尝试静默刷新 OAuth 邮箱。
+
+Client ID + Refresh Token 高级导入不使用这里保存的 Client Secret，但 Refresh Token 必须由同一 Client ID 的合法委托授权签发，至少具有 `offline_access`、`User.Read`、`Mail.ReadWrite`、`Mail.Send`，且应用必须允许不提交 Client Secret 的公共客户端刷新。若应用属于必须提交 Secret 的 confidential client，请改用 OAuth 网页登录。
 
 ## 注册 Google Cloud Gmail 应用
 
@@ -507,6 +511,7 @@ https://mail.example.com/api/v1/google/oauth/callback
 - 域名与 MailPilot 的公开地址完全一致。
 - 路径必须是 `/api/v1/google/oauth/callback`。
 - 不要增加结尾斜杠、额外路径或查询参数。
+- 这是服务端 Web OAuth 回调，不要求填写 Authorized JavaScript origins。
 
 ### 5. 填入 MailPilot
 
@@ -899,6 +904,7 @@ UNCERTAIN 记录禁止直接强制重发，应先人工检查对应邮箱的草�
 
 - 处理日志。
 - 系统日志。
+- 告警记录。
 - 管理员审计日志。
 
 处理日志仅保存元数据，例如：
@@ -925,14 +931,17 @@ UNCERTAIN 记录禁止直接强制重发，应先人工检查对应邮箱的草�
 
 默认保存周期：
 
-| 数据     | 默认天数 |
-| -------- | -------: |
-| 处理日志 |       30 |
-| 系统日志 |       30 |
-| 审计日志 |      180 |
-| 去重指纹 |      365 |
+| 数据                   | 默认天数 |
+| ---------------------- | -------: |
+| 处理日志               |       30 |
+| 系统日志               |       30 |
+| 已恢复的告警记录       |       30 |
+| 审计日志               |      180 |
+| 去重指纹（可靠性数据） |      365 |
 
-可在系统设置中设置为 1–3650 天。系统每天自动清理超期记录。
+可在“系统设置 → 常规”中分别设置为 1–3650 天。Worker 启动后会立即检查一次，之后至少每 24 小时自动清理超期记录。仍处于“未处理”或“已确认”的活动告警不会因为保留周期而消失，只有状态为“已恢复”的告警记录才会删除；删除告警前也会清理关联的待投递 Webhook Outbox。
+
+去重指纹不是可见日志，它用于阻止同一封邮件被重复回复。缩短该周期会同步缩短极旧邮件在异常重新扫描时的重复保护时间，建议保留默认 365 天。
 
 处理日志和系统日志支持 CSV/JSON 导出。CSV 已对表格公式注入进行防护。
 
@@ -1043,7 +1052,7 @@ docker compose exec app autoreply admin reset-password --disable-totp
 - 邮箱、任务、游标和规则。
 - 模板、模板版本和附件。
 - 系统设置和 Webhook。
-- 处理日志、系统日志、审计日志和去重记录。
+- 处理日志、系统日志、告警记录、审计日志和去重记录。
 
 备份不包含：
 
@@ -1613,6 +1622,7 @@ v0.08
 v0.09
 v0.10
 v0.11
+v0.12
 ...
 ```
 

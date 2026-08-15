@@ -65,6 +65,7 @@ export function SettingsPage() {
         attachmentLimitMb: data.attachmentLimitMb,
         processingLogDays: data.processingLogDays,
         systemLogDays: data.systemLogDays,
+        alertLogDays: data.alertLogDays,
         auditLogDays: data.auditLogDays,
         dedupeDays: data.dedupeDays,
         sessionIdleMinutes: data.sessionIdleMinutes,
@@ -238,7 +239,11 @@ export function SettingsPage() {
                 />
               </label>
             </div>
-            <h3>数据保存周期（天）</h3>
+            <h3>日志和告警保存周期（天）</h3>
+            <p className="muted-copy">
+              Worker
+              每天自动清理超过周期的数据。仍处于“未处理”或“已确认”的活动告警会保留，只有已恢复的告警记录会按周期删除。
+            </p>
             <div className="form-grid four">
               <NumberField
                 label="处理日志"
@@ -251,10 +256,22 @@ export function SettingsPage() {
                 onChange={(v) => setData({ ...data, systemLogDays: v })}
               />
               <NumberField
+                label="告警记录"
+                value={data.alertLogDays}
+                onChange={(v) => setData({ ...data, alertLogDays: v })}
+              />
+              <NumberField
                 label="审计日志"
                 value={data.auditLogDays}
                 onChange={(v) => setData({ ...data, auditLogDays: v })}
               />
+            </div>
+            <h3>可靠性数据保存周期（天）</h3>
+            <p className="muted-copy">
+              去重指纹用于阻止同一封邮件被重复回复，建议保留默认 365
+              天；缩短后，极旧邮件在异常重新扫描时的重复保护时间也会缩短。
+            </p>
+            <div className="form-grid four">
               <NumberField
                 label="去重指纹"
                 value={data.dedupeDays}
@@ -280,6 +297,45 @@ export function SettingsPage() {
               网页登录”方式使用；使用独立 Client ID + Refresh Token
               导入的邮箱不受这里的 Client ID 变更影响。Client Secret
               保存后不再回显。
+            </Notice>
+            <h3>Microsoft Entra 配置清单</h3>
+            <div className="provider-setup-grid">
+              <section>
+                <strong>1. 注册应用与账户类型</strong>
+                <p>
+                  Entra 管理中心 → 应用注册 →
+                  新注册。支持的账户类型选择“任何组织目录中的账户和个人
+                  Microsoft 账户”，这样才能同时连接 Outlook/Hotmail 和全球版
+                  Microsoft 365 用户邮箱。
+                </p>
+              </section>
+              <section>
+                <strong>2. 添加 Web 回调</strong>
+                <p>
+                  身份验证 → 添加平台 → Web，把下方 OAuth
+                  回调地址原样加入“重定向 URI”。必须使用
+                  HTTPS，不能增加结尾斜杠、路径或参数。
+                </p>
+              </section>
+              <section>
+                <strong>3. 添加委托权限</strong>
+                <p>
+                  API 权限 → 添加权限 → Microsoft Graph →
+                  <b> 委托的权限（Delegated permissions）</b>，添加
+                  openid、profile、offline_access、User.Read、Mail.ReadWrite、Mail.Send。
+                </p>
+              </section>
+              <section>
+                <strong>4. 同意与 Client Secret</strong>
+                <p>
+                  企业租户若禁止用户自行同意，需要租户管理员批准或“代表组织授予管理员同意”。随后在“证书和密码”创建
+                  Client Secret，并复制 <b>Value</b>，不要复制 Secret ID。
+                </p>
+              </section>
+            </div>
+            <Notice kind="danger">
+              不要选择“应用程序权限（Application
+              permissions）”。本系统只使用登录用户的委托权限；给错权限会导致登录后仍无法读信或发信。
             </Notice>
             <div className="form-grid">
               <label>
@@ -328,11 +384,23 @@ export function SettingsPage() {
               <span>OAuth 回调地址</span>
               <code>{ms.callbackUrl}</code>
             </div>
+            <h3>系统请求的完整 Microsoft 权限</h3>
             <div className="scope-list">
               {ms.scopes.map((s: string) => (
                 <span key={s}>{s}</span>
               ))}
             </div>
+            <p className="permission-help">
+              openid、profile 用于识别登录账户；offline_access
+              用于无人值守续期；User.Read 读取当前用户；Mail.ReadWrite
+              读取收件箱/垃圾箱并管理回复草稿；Mail.Send 发送普通 Reply。
+            </p>
+            <Notice>
+              “Client ID + Refresh Token”高级导入不使用这里的 Secret。该 Token
+              必须属于同一个 Client ID，来自委托授权，并至少包含
+              offline_access、User.Read、Mail.ReadWrite、Mail.Send；签发应用还必须允许不提交
+              Client Secret 的公共客户端刷新。
+            </Notice>
             <button className="primary" onClick={saveMs}>
               <CloudCog />
               保存 Microsoft 配置
@@ -349,6 +417,42 @@ export function SettingsPage() {
               客户端。若应用仍处于“测试中”，外部用户的刷新令牌通常会在 7
               天后失效；Client Secret 保存后不再回显。
             </Notice>
+            <h3>Google Cloud 配置清单</h3>
+            <div className="provider-setup-grid">
+              <section>
+                <strong>1. 启用 Gmail API</strong>
+                <p>
+                  Google Cloud Console → API 和服务 → 库 → Gmail API →
+                  启用。只创建 OAuth 客户端但未启用 Gmail
+                  API，会在连接后读取或发信时返回 403。
+                </p>
+              </section>
+              <section>
+                <strong>2. 配置 OAuth 同意屏幕</strong>
+                <p>
+                  Google Auth Platform → Branding / Audience。个人 Gmail
+                  或组织外账户选择 External；仅 Workspace 组织内部可选择
+                  Internal。Testing 状态时必须把要连接的邮箱加入 Test users。
+                </p>
+              </section>
+              <section>
+                <strong>3. 添加数据访问范围</strong>
+                <p>
+                  Data Access 中确认
+                  openid、email、profile、gmail.readonly、gmail.compose。readonly
+                  用于检测邮件和标签，compose 用于创建并发送带
+                  HTML、内嵌图片或附件的回复草稿。
+                </p>
+              </section>
+              <section>
+                <strong>4. 创建 Web OAuth Client</strong>
+                <p>
+                  Clients → Create Client → Web application，把下方地址加入
+                  Authorized redirect URIs。这里不需要把后台地址填入 JavaScript
+                  origins。
+                </p>
+              </section>
+            </div>
             <div className="form-grid">
               <label>
                 Client ID
@@ -390,6 +494,7 @@ export function SettingsPage() {
               <span>OAuth 回调地址</span>
               <code>{google.callbackUrl}</code>
             </div>
+            <h3>系统请求的完整 Google 权限</h3>
             <div className="scope-list">
               {google.scopes.map((scope: string) => (
                 <span key={scope}>{scope}</span>
@@ -398,7 +503,8 @@ export function SettingsPage() {
             <Notice>
               Gmail 权限包含 Google 受限权限。公开提供给大量外部用户前，Google
               可能要求完成 OAuth
-              应用验证和安全评估；自用或测试阶段请把邮箱加入“测试用户”。
+              应用验证和安全评估；自用或测试阶段请把邮箱加入“测试用户”。Gmail
+              当前只支持 OAuth 网页登录，不支持直接粘贴邮箱密码。
             </Notice>
             <button className="primary" onClick={saveGoogle}>
               <CloudCog />

@@ -16,6 +16,7 @@ const DEFAULTS: Record<string, unknown> = {
   attachmentLimitMb: 10,
   processingLogDays: 30,
   systemLogDays: 30,
+  alertLogDays: 30,
   auditLogDays: 180,
   dedupeDays: 365,
   sessionIdleMinutes: 120,

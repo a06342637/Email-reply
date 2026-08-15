@@ -37,4 +37,55 @@ describe("SchedulerService secret expiry", () => {
     expect(alerts.resolve).toHaveBeenCalledWith("microsoft-secret:7");
     expect(alerts.resolve).toHaveBeenCalledWith("microsoft-secret:1");
   });
+
+  it("deletes only resolved alerts after the configured retention period", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-16T00:00:00.000Z"));
+    try {
+      const prisma = {
+        systemSetting: {
+          findMany: vi
+            .fn()
+            .mockResolvedValue([{ key: "alertLogDays", value: 14 }]),
+        },
+        processingLog: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+        systemLog: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+        alert: { deleteMany: vi.fn().mockResolvedValue({ count: 2 }) },
+        auditLog: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+        messageReceipt: {
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+        adminSession: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+        oAuthState: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+        $executeRaw: vi.fn().mockResolvedValue(0),
+      };
+      const service = new SchedulerService(
+        prisma as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+
+      await (service as any).cleanup();
+
+      expect(prisma.systemSetting.findMany).toHaveBeenCalledWith({
+        where: {
+          key: {
+            in: expect.arrayContaining(["alertLogDays"]),
+          },
+        },
+      });
+      expect(prisma.alert.deleteMany).toHaveBeenCalledWith({
+        where: {
+          status: "RESOLVED",
+          lastSeenAt: { lt: new Date("2026-08-02T00:00:00.000Z") },
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
