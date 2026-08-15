@@ -19,6 +19,7 @@ import {
 import { basename, isAbsolute, join } from "node:path";
 import {
   compareReleaseVersions,
+  composeVersionEnvironment,
   latestReleaseTag,
   normalizeRepositoryUrl,
   releaseVersionFromTag,
@@ -387,7 +388,10 @@ async function docker(args: string[], options?: Parameters<typeof run>[2]) {
 }
 
 async function compose(args: string[], options?: Parameters<typeof run>[2]) {
-  return docker([...composeArgs, ...args], options);
+  return docker([...composeArgs, ...args], {
+    ...options,
+    env: composeVersionEnvironment(readCurrentVersion(), options?.env),
+  });
 }
 
 async function discoverUpdate(): Promise<Discovery> {
@@ -695,6 +699,8 @@ async function scheduleUpdaterRefresh(): Promise<void> {
     `${projectDir}:/workspace`,
     "-w",
     "/workspace",
+    "-e",
+    `APP_VERSION=${readCurrentVersion()}`,
     "microsoft-mail-autoreply-updater:local",
     "sh",
     "-lc",

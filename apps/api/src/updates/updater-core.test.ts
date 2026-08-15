@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compareReleaseVersions,
+  composeVersionEnvironment,
   latestReleaseTag,
   normalizeRepositoryUrl,
   parseReleaseVersion,
@@ -47,6 +48,18 @@ describe("updater safety helpers", () => {
     expect(replaceEnvValue("A=1\n", "PROJECT_DIR", "/opt/app")).toBe(
       "A=1\nPROJECT_DIR=/opt/app\n",
     );
+  });
+
+  it("overrides a stale updater version for every compose subprocess", () => {
+    expect(
+      composeVersionEnvironment("0.09", {
+        APP_VERSION: "0.08",
+        AUTOREPLY_IMAGE: "rollback-image",
+      }),
+    ).toEqual({
+      APP_VERSION: "0.09",
+      AUTOREPLY_IMAGE: "rollback-image",
+    });
   });
 
   it("redacts suspicious command output", () => {

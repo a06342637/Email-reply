@@ -17,7 +17,7 @@ RUN npx prisma generate
 RUN npm run build
 
 FROM node:22-alpine AS updater
-ARG APP_VERSION=0.08
+ARG APP_VERSION=0.09
 ENV NODE_ENV=production \
     APP_VERSION=$APP_VERSION
 LABEL org.opencontainers.image.title="MailPilot Updater" \
@@ -34,7 +34,7 @@ FROM deps AS prod-deps
 RUN npm ci --omit=dev --workspaces --include-workspace-root
 
 FROM base AS runtime
-ARG APP_VERSION=0.08
+ARG APP_VERSION=0.09
 ENV NODE_ENV=production
 LABEL org.opencontainers.image.title="MailPilot" \
       org.opencontainers.image.version="$APP_VERSION" \

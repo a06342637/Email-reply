@@ -74,6 +74,13 @@ export function replaceEnvValue(
   return next.join("\n");
 }
 
+export function composeVersionEnvironment(
+  version: string,
+  extra: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
+  return { ...extra, APP_VERSION: version };
+}
+
 export function sanitizeUpdaterLog(value: string): string {
   const trimmed = [...value]
     .filter((character) => {

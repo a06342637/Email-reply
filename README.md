@@ -1,6 +1,6 @@
 # MailPilot — Microsoft 与 Gmail 邮箱自动回复系统
 
-当前版本：**v0.08**
+当前版本：**v0.09**
 
 [![CI](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml)
 
@@ -8,12 +8,12 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 
 系统不使用 IMAP/SMTP，不保存邮箱密码。收件、发件和 OAuth 都通过 HTTPS 访问 Microsoft 或 Google 官方 API，因此服务器无需开放 993、465 或 587 端口。
 
-> v0.08 已完成代码级、类型、构建、自动化测试、本地 UI 冒烟测试，以及 Debian ARM64 上从 v0.06 到 v0.07 的真实在线升级验证；同时补齐 Buildx，确保后续版本继续使用现代 Compose 构建链路。正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据和测试邮箱完成本文末尾的业务验收。
+> v0.09 已完成代码级、类型、构建、自动化测试、本地 UI 冒烟测试，以及 Debian ARM64 上 v0.06 → v0.07 → v0.08 的连续在线升级验证；同时补齐 Buildx，并修复旧 updater 环境变量覆盖目标版本的问题。正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据和测试邮箱完成本文末尾的业务验收。
 
 ## 目录
 
 - [主要功能](#主要功能)
-- [v0.08 支持范围](#v008-支持范围)
+- [v0.09 支持范围](#v009-支持范围)
 - [系统架构](#系统架构)
 - [网络与服务器要求](#网络与服务器要求)
 - [Debian 一键安装](#debian-一键安装)
@@ -62,7 +62,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - 系统设置内置在线升级：检查正式版本、升级前加密备份、实时进度、健康检查和失败自动回滚。
 - 提供 Debian 安装脚本、改密 CLI、健康检查和命令行升级回滚脚本。
 
-## v0.08 支持范围
+## v0.09 支持范围
 
 支持：
 
@@ -1610,6 +1610,7 @@ v0.05
 v0.06
 v0.07
 v0.08
+v0.09
 ...
 ```
 

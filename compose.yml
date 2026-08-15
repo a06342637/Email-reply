@@ -7,7 +7,7 @@ x-app-common: &app-common
     dockerfile: Dockerfile
     target: runtime
     args:
-      APP_VERSION: ${APP_VERSION:-0.08}
+      APP_VERSION: ${APP_VERSION:-0.09}
   env_file:
     - .env
   depends_on:
@@ -117,9 +117,9 @@ services:
       dockerfile: Dockerfile
       target: updater
       args:
-        APP_VERSION: ${APP_VERSION:-0.08}
+        APP_VERSION: ${APP_VERSION:-0.09}
     environment:
-      APP_VERSION: ${APP_VERSION:-0.08}
+      APP_VERSION: ${APP_VERSION:-0.09}
       UPDATE_PORT: 3001
       UPDATER_TOKEN: ${UPDATER_TOKEN:-}
       UPDATE_WORKDIR: /workspace
