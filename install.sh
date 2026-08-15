@@ -82,6 +82,7 @@ elif (( ${#ADMIN_PASSWORD} < 12 )); then echo "密码至少 12 位"; exit 1; fi
 POSTGRES_PASSWORD=$(random_urlsafe 24)
 INSTANCE_KEY=$(random_base64 32)
 SESSION_SECRET=$(random_urlsafe 32)
+UPDATER_TOKEN=$(random_urlsafe 32)
 
 umask 077
 cat > .env <<EOF
@@ -104,6 +105,8 @@ TZ=Asia/Shanghai
 LOG_LEVEL=info
 BOOTSTRAP_FILE=/bootstrap/admin.json
 WORKER_ID=worker-1
+PROJECT_DIR=$ROOT_DIR
+UPDATER_TOKEN=$UPDATER_TOKEN
 EOF
 
 PROJECT_NAME=$(docker compose config --format json | jq -r '.name')
@@ -120,11 +123,15 @@ docker compose up -d
 
 echo "等待应用和 Worker 健康检查..."
 for _ in $(seq 1 90); do
-  if curl -fsS "http://127.0.0.1:$HOST_PORT/health/ready" >/dev/null 2>&1; then break; fi
+  UPDATER_CONTAINER=$(docker compose ps -q updater || true)
+  UPDATER_HEALTH=$([[ -n "$UPDATER_CONTAINER" ]] && docker inspect "$UPDATER_CONTAINER" --format '{{.State.Health.Status}}' 2>/dev/null || true)
+  if curl -fsS "http://127.0.0.1:$HOST_PORT/health/ready" >/dev/null 2>&1 && [[ "$UPDATER_HEALTH" == healthy ]]; then break; fi
   sleep 2
 done
-if ! curl -fsS "http://127.0.0.1:$HOST_PORT/health/ready" >/dev/null 2>&1; then
-  echo "应用未能在预期时间内启动，请运行 docker compose logs app worker migrate 查看原因。"
+UPDATER_CONTAINER=$(docker compose ps -q updater || true)
+UPDATER_HEALTH=$([[ -n "$UPDATER_CONTAINER" ]] && docker inspect "$UPDATER_CONTAINER" --format '{{.State.Health.Status}}' 2>/dev/null || true)
+if ! curl -fsS "http://127.0.0.1:$HOST_PORT/health/ready" >/dev/null 2>&1 || [[ "$UPDATER_HEALTH" != healthy ]]; then
+  echo "应用或在线升级器未能在预期时间内启动，请运行 docker compose logs app worker updater migrate 查看原因。"
   exit 1
 fi
 

@@ -13,6 +13,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import { api, currentCsrf, json } from "../api";
 import { useApp } from "../app-context";
+import { UpdatePanel } from "../UpdatePanel";
 import {
   Card,
   Loading,
@@ -128,6 +129,7 @@ export function SettingsPage() {
           ["google", "Google / Gmail"],
           ["security", "登录安全"],
           ["backup", "备份恢复"],
+          ["update", "在线升级"],
           ["system", "系统状态"],
         ].map((x) => (
           <button
@@ -477,6 +479,7 @@ export function SettingsPage() {
         </Card>
       )}
       {tab === "backup" && <BackupPanel notify={notify} />}{" "}
+      {tab === "update" && <UpdatePanel notify={notify} />}
       {tab === "system" && (
         <Card>
           <div className="settings-section">

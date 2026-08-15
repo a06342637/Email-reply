@@ -12,6 +12,7 @@ import { BackupModule } from "./backup/backup.module.js";
 import { HealthController } from "./health/health.controller.js";
 import { BootstrapService } from "./bootstrap.service.js";
 import { AppMonitorService } from "./observability/app-monitor.service.js";
+import { UpdateModule } from "./updates/update.module.js";
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { AppMonitorService } from "./observability/app-monitor.service.js";
     ObservabilityModule,
     SettingsModule,
     BackupModule,
+    UpdateModule,
     ServeStaticModule.forRoot({
       rootPath: join(process.cwd(), "apps/web/dist"),
       exclude: ["/api/{*path}", "/health/{*path}"],

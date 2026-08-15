@@ -16,11 +16,25 @@ COPY . .
 RUN npx prisma generate
 RUN npm run build
 
+FROM node:22-alpine AS updater
+ARG APP_VERSION=0.07
+ENV NODE_ENV=production \
+    APP_VERSION=$APP_VERSION
+LABEL org.opencontainers.image.title="MailPilot Updater" \
+      org.opencontainers.image.version="$APP_VERSION" \
+      org.opencontainers.image.source="https://github.com/a06342637/Email-reply"
+RUN apk add --no-cache bash ca-certificates curl git docker-cli docker-cli-compose
+WORKDIR /updater
+COPY --from=builder /app/apps/api/dist ./dist
+USER root
+EXPOSE 3001
+CMD ["node", "/updater/dist/updater.js"]
+
 FROM deps AS prod-deps
 RUN npm ci --omit=dev --workspaces --include-workspace-root
 
 FROM base AS runtime
-ARG APP_VERSION=0.06
+ARG APP_VERSION=0.07
 ENV NODE_ENV=production
 LABEL org.opencontainers.image.title="MailPilot" \
       org.opencontainers.image.version="$APP_VERSION" \

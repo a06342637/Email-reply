@@ -22,7 +22,7 @@ let smokeSettings = {
   dedupeDays: 365,
   sessionIdleMinutes: 120,
   sessionAbsoluteMinutes: 720,
-  version: "0.06",
+  version: "0.07",
 };
 
 const template = {
@@ -300,7 +300,7 @@ function api(path, method, body, res) {
     });
   if (path === "/api/v1/system/info")
     return json(res, {
-      version: "0.06",
+      version: "0.07",
       node: process.version,
       database: true,
       redis: true,
@@ -310,6 +310,56 @@ function api(path, method, body, res) {
       databaseSize: 12_345_678,
       disk: { total: 100_000_000_000, free: 80_000_000_000 },
     });
+  if (path === "/api/v1/update/status")
+    return json(res, {
+      phase: "UP_TO_DATE",
+      busy: false,
+      progress: 100,
+      currentVersion: "0.07",
+      latestVersion: "0.07",
+      updateAvailable: false,
+      message: "当前已经是最新正式版本",
+      checkedAt: now,
+      startedAt: null,
+      finishedAt: null,
+      currentCommit: "0123456789abcdef",
+      targetCommit: "0123456789abcdef",
+      releaseNotes: [],
+      blockedReason: null,
+      backupFile: null,
+      rollbackImage: null,
+      error: null,
+      logs: ["当前已是最新版本"],
+      updaterVersion: "0.07",
+    });
+  if (path === "/api/v1/update/check")
+    return json(res, {
+      phase: "AVAILABLE",
+      busy: false,
+      progress: 100,
+      currentVersion: "0.07",
+      latestVersion: "0.08",
+      updateAvailable: true,
+      message: "发现正式版本 v0.08",
+      checkedAt: now,
+      startedAt: null,
+      finishedAt: null,
+      currentCommit: "0123456789abcdef",
+      targetCommit: "fedcba9876543210",
+      releaseNotes: ["演示在线升级确认流程", "验证升级前加密备份"],
+      blockedReason: null,
+      backupFile: null,
+      rollbackImage: null,
+      error: null,
+      logs: ["开始检查更新", "发现 v0.08"],
+      updaterVersion: "0.07",
+    });
+  if (path === "/api/v1/update/apply")
+    return json(
+      res,
+      { accepted: true, targetVersion: "0.08", phase: "QUEUED" },
+      202,
+    );
   if (path === "/api/v1/webhooks") return json(res, []);
   if (path === "/api/v1/alerts") return json(res, []);
   if (path === "/api/v1/processing-logs") return json(res, page([]));

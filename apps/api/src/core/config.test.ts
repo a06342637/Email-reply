@@ -39,4 +39,21 @@ describe("AppConfig proxy defaults", () => {
       else process.env.TRUST_PROXY = previous;
     }
   });
+
+  it("derives a migration-safe updater token when an older env has no token", () => {
+    const previousKey = process.env.INSTANCE_KEY;
+    const previousToken = process.env.UPDATER_TOKEN;
+    process.env.INSTANCE_KEY = Buffer.alloc(32, 7).toString("base64");
+    delete process.env.UPDATER_TOKEN;
+    try {
+      expect(new AppConfig().updaterToken).toMatch(/^[a-f0-9]{64}$/);
+      process.env.UPDATER_TOKEN = "x".repeat(64);
+      expect(new AppConfig().updaterToken).toBe("x".repeat(64));
+    } finally {
+      if (previousKey === undefined) delete process.env.INSTANCE_KEY;
+      else process.env.INSTANCE_KEY = previousKey;
+      if (previousToken === undefined) delete process.env.UPDATER_TOKEN;
+      else process.env.UPDATER_TOKEN = previousToken;
+    }
+  });
 });

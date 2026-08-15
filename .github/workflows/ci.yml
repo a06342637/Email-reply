@@ -49,6 +49,7 @@ jobs:
           app_version=$(tr -d '[:space:]' < VERSION)
           instance_key=$(openssl rand -base64 32 | tr -d '\n')
           session_secret=$(openssl rand -hex 32)
+          updater_token=$(openssl rand -hex 32)
           cat > .env <<EOF
           NODE_ENV=production
           APP_VERSION=$app_version
@@ -69,6 +70,8 @@ jobs:
           LOG_LEVEL=info
           BOOTSTRAP_FILE=/bootstrap/admin.json
           WORKER_ID=worker-1
+          PROJECT_DIR=$GITHUB_WORKSPACE
+          UPDATER_TOKEN=$updater_token
           EOF
           project_name=$(docker compose config --format json | jq -r '.name')
           bootstrap_volume="${project_name}_bootstrap_data"
@@ -93,6 +96,9 @@ jobs:
           test "$ready" = true
           curl -fsS http://127.0.0.1:18080/health/live
           curl -fsS http://127.0.0.1:18080/health/ready
+          updater_container=$(docker compose ps -q updater)
+          test -n "$updater_container"
+          test "$(docker inspect "$updater_container" --format '{{.State.Health.Status}}')" = "healthy"
           test "$(docker compose exec -T app autoreply admin show-username)" = "ci_admin"
           docker compose exec -T app autoreply doctor
           index_count=$(docker compose exec -T postgres psql -U autoreply -d autoreply -Atc "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'TransactionalOutbox_aggregateId_kind_idx'")
@@ -109,7 +115,7 @@ jobs:
         if: always()
         run: |
           docker compose ps -a || true
-          docker compose logs --no-color --tail=300 app worker migrate postgres redis || true
+          docker compose logs --no-color --tail=300 app worker updater migrate postgres redis || true
       - name: Clean up
         if: always()
         run: docker compose down -v --remove-orphans || true

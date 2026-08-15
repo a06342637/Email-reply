@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { createHash } from "node:crypto";
 
 function integer(name: string, fallback: number): number {
   const value = process.env[name];
@@ -32,7 +33,7 @@ export function normalizePublicUrl(value: string): string {
 @Injectable()
 export class AppConfig {
   readonly nodeEnv = process.env.NODE_ENV ?? "development";
-  readonly version = process.env.APP_VERSION ?? "0.06";
+  readonly version = process.env.APP_VERSION ?? "0.07";
   readonly host = process.env.APP_HOST ?? "0.0.0.0";
   readonly port = integer("APP_PORT", 3000);
   readonly databaseUrl = process.env.DATABASE_URL ?? "";
@@ -45,6 +46,14 @@ export class AppConfig {
   readonly bootstrapFile =
     process.env.BOOTSTRAP_FILE ?? "/bootstrap/admin.json";
   readonly workerId = process.env.WORKER_ID ?? `worker-${process.pid}`;
+  readonly updaterUrl = (process.env.UPDATER_URL ?? "").replace(/\/$/, "");
+  readonly updaterToken =
+    process.env.UPDATER_TOKEN ||
+    (this.instanceKey
+      ? createHash("sha256")
+          .update(`mailpilot-updater:${this.instanceKey}`)
+          .digest("hex")
+      : "");
 
   validate(): void {
     const missing: string[] = [];

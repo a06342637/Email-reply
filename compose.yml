@@ -7,7 +7,7 @@ x-app-common: &app-common
     dockerfile: Dockerfile
     target: runtime
     args:
-      APP_VERSION: ${APP_VERSION:-0.06}
+      APP_VERSION: ${APP_VERSION:-0.07}
   env_file:
     - .env
   depends_on:
@@ -59,6 +59,12 @@ services:
 
   app:
     <<: *app-common
+    environment:
+      UPDATER_URL: http://updater:3001
+      UPDATER_TOKEN: ${UPDATER_TOKEN:-}
+    networks:
+      - default
+      - control
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,6 +92,9 @@ services:
 
   worker:
     <<: *app-common
+    environment:
+      UPDATER_URL: ""
+      UPDATER_TOKEN: ""
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,6 +109,60 @@ services:
       timeout: 8s
       retries: 4
       start_period: 30s
+
+  updater:
+    image: ${AUTOREPLY_UPDATER_IMAGE:-microsoft-mail-autoreply-updater:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: updater
+      args:
+        APP_VERSION: ${APP_VERSION:-0.07}
+    environment:
+      APP_VERSION: ${APP_VERSION:-0.07}
+      UPDATE_PORT: 3001
+      UPDATER_TOKEN: ${UPDATER_TOKEN:-}
+      UPDATE_WORKDIR: /workspace
+      UPDATE_STATE_DIR: /state
+      UPDATE_PROJECT_DIR: ${PROJECT_DIR:-}
+      UPDATE_REMOTE: origin
+      UPDATE_BRANCH: main
+      UPDATE_REPOSITORY_URL: https://github.com/a06342637/Email-reply.git
+      UPDATE_HEALTH_URL: http://app:3000/health/ready
+    working_dir: /workspace
+    volumes:
+      - type: bind
+        source: ${PROJECT_DIR:-.}
+        target: /workspace
+      - updater_state:/state
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - control
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
 
   postgres:
     image: postgres:16-alpine
@@ -160,3 +223,8 @@ volumes:
   postgres_data:
   redis_data:
   bootstrap_data:
+  updater_state:
+
+networks:
+  default:
+  control:
