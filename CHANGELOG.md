@@ -1,5 +1,11 @@
 # 更新日志
 
+## v0.11 - 2026-08-16
+
+- 修复 Buildx 在只读 updater 容器中首次创建 `/root/.docker` 失败的问题；Docker 配置和 Buildx 状态现在固定写入 `/tmp/docker` 内存盘。
+- 在 Debian ARM64 上验证该故障会在服务切换前安全停止，并确认自动回滚可恢复 Git、`APP_VERSION` 和运行服务到 v0.08。
+- 新增 updater 容器打包回归测试，持续检查 Buildx 包、可写 Docker 配置目录和 `/tmp` tmpfs 配置没有缺失。
+
 ## v0.10 - 2026-08-16
 
 - 将镜像构建版本与 updater 运行版本从旧容器的 `APP_VERSION` 中解耦，改用内部 `BUILD_APP_VERSION` 和 `UPDATER_APP_VERSION`，避免旧环境变量覆盖目标版本。
