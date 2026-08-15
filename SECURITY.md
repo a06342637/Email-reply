@@ -1,5 +1,6 @@
 # 安全说明
 
+- v0.05 修复了通配符认证中间件导致 API 请求未执行认证的问题；升级后请重新登录并确认后台接口未登录时返回 401。
 - Microsoft/Google Client Secret、MSAL/Google Token Cache、Delta Link、Gmail History ID、Webhook Secret 和 TOTP Secret 使用实例主密钥加密保存。
 - 邮箱密码从不进入系统。
 - 管理员密码使用 Argon2id；会话使用 Secure/HttpOnly/SameSite Cookie 与 CSRF Token。

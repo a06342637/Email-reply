@@ -20,7 +20,7 @@ FROM deps AS prod-deps
 RUN npm ci --omit=dev --workspaces --include-workspace-root
 
 FROM base AS runtime
-ARG APP_VERSION=0.04
+ARG APP_VERSION=0.05
 ENV NODE_ENV=production
 LABEL org.opencontainers.image.title="MailPilot" \
       org.opencontainers.image.version="$APP_VERSION" \

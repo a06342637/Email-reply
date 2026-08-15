@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizePublicUrl } from "./config.js";
+import { AppConfig, normalizePublicUrl } from "./config.js";
 
 describe("normalizePublicUrl", () => {
   it("accepts an HTTPS origin and removes a trailing slash", () => {
@@ -25,5 +25,18 @@ describe("normalizePublicUrl", () => {
     expect(() => normalizePublicUrl(value)).toThrow(
       "PUBLIC_URL must be a valid HTTPS origin",
     );
+  });
+});
+
+describe("AppConfig proxy defaults", () => {
+  it("does not trust forwarded headers unless explicitly configured", () => {
+    const previous = process.env.TRUST_PROXY;
+    delete process.env.TRUST_PROXY;
+    try {
+      expect(new AppConfig().trustProxy).toBe(0);
+    } finally {
+      if (previous === undefined) delete process.env.TRUST_PROXY;
+      else process.env.TRUST_PROXY = previous;
+    }
   });
 });

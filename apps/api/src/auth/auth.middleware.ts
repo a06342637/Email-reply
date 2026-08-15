@@ -16,18 +16,26 @@ const PASSWORD_CHANGE_PATHS = new Set([
   "/api/v1/auth/logout",
 ]);
 
+/**
+ * Nest's wildcard middleware can mount Express with `req.path` set to `/`.
+ * Always derive the route from the original URL so authentication cannot be
+ * skipped when the middleware is mounted through a wildcard path.
+ */
+function requestPath(req: Request): string {
+  const raw = req.originalUrl || req.url || req.path || "/";
+  return raw.split("?", 1)[0] || "/";
+}
+
 @Injectable()
 export class AuthMiddleware implements NestMiddleware {
   constructor(private readonly auth: AuthService) {}
 
   async use(req: Request, _res: Response, next: NextFunction): Promise<void> {
-    if (!req.path.startsWith("/api/") || PUBLIC_PATHS.has(req.path))
-      return next();
+    const path = requestPath(req);
+    if (!path.startsWith("/api/") || PUBLIC_PATHS.has(path)) return next();
     await this.auth.authenticate(req);
-    if (
-      req.auth?.admin.mustChangePassword &&
-      !PASSWORD_CHANGE_PATHS.has(req.path)
-    ) {
+    if (!req.auth) throw new AppError("UNAUTHORIZED", "请先登录", 401);
+    if (req.auth.admin.mustChangePassword && !PASSWORD_CHANGE_PATHS.has(path)) {
       throw new AppError(
         "PASSWORD_CHANGE_REQUIRED",
         "首次登录必须先修改临时密码",

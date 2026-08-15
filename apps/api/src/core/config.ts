@@ -32,7 +32,7 @@ export function normalizePublicUrl(value: string): string {
 @Injectable()
 export class AppConfig {
   readonly nodeEnv = process.env.NODE_ENV ?? "development";
-  readonly version = process.env.APP_VERSION ?? "0.04";
+  readonly version = process.env.APP_VERSION ?? "0.05";
   readonly host = process.env.APP_HOST ?? "0.0.0.0";
   readonly port = integer("APP_PORT", 3000);
   readonly databaseUrl = process.env.DATABASE_URL ?? "";
@@ -41,7 +41,7 @@ export class AppConfig {
   readonly sessionSecret = process.env.SESSION_SECRET ?? "";
   readonly publicUrl = normalizePublicUrl(process.env.PUBLIC_URL ?? "");
   readonly timezone = process.env.TZ ?? "Asia/Shanghai";
-  readonly trustProxy = integer("TRUST_PROXY", 1);
+  readonly trustProxy = integer("TRUST_PROXY", 0);
   readonly bootstrapFile =
     process.env.BOOTSTRAP_FILE ?? "/bootstrap/admin.json";
   readonly workerId = process.env.WORKER_ID ?? `worker-${process.pid}`;
