@@ -170,7 +170,7 @@ export class MailTransportService {
     try {
       return await this.graph.request<GraphMessage>(
         mailboxId,
-        `/me/messages/${encodeURIComponent(messageId)}?$select=id,isDraft,internetMessageId,conversationId,subject,createdDateTime,sentDateTime,internetMessageHeaders&$expand=extensions`,
+        `/me/messages/${encodeURIComponent(messageId)}?$select=id,isDraft,internetMessageId,conversationId,subject,createdDateTime,sentDateTime,internetMessageHeaders`,
         {},
         { maxRetries: 1, expected: [200] },
       );
@@ -188,7 +188,7 @@ export class MailTransportService {
   ): Promise<GraphMessage | null> {
     return this.findByTracking(
       mailboxId,
-      "/me/mailFolders/drafts/messages?$top=50&$orderby=createdDateTime%20desc&$select=id,isDraft,internetMessageId,conversationId,subject,createdDateTime,internetMessageHeaders&$expand=extensions",
+      "/me/mailFolders/drafts/messages?$top=50&$orderby=createdDateTime%20desc&$select=id,isDraft,internetMessageId,conversationId,subject,createdDateTime,internetMessageHeaders",
       trackingId,
       conversationId,
       "createdDateTime",
@@ -204,7 +204,7 @@ export class MailTransportService {
   ): Promise<GraphMessage | null> {
     return this.findByTracking(
       mailboxId,
-      "/me/mailFolders/sentitems/messages?$top=50&$orderby=sentDateTime%20desc&$select=id,isDraft,internetMessageId,conversationId,subject,sentDateTime,internetMessageHeaders&$expand=extensions",
+      "/me/mailFolders/sentitems/messages?$top=50&$orderby=sentDateTime%20desc&$select=id,isDraft,internetMessageId,conversationId,subject,sentDateTime,internetMessageHeaders",
       trackingId,
       conversationId,
       "sentDateTime",

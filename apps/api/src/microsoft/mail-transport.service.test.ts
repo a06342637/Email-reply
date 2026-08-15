@@ -55,10 +55,10 @@ describe("MailTransportService", () => {
             id: "sent-1",
             isDraft: false,
             sentDateTime: now,
-            extensions: [
+            internetMessageHeaders: [
               {
-                extensionName: "Com.MailPilot.AutoReply",
-                trackingId: "tracking-1",
+                name: "X-AutoReply-Tracking",
+                value: "tracking-1",
               },
             ],
           },
@@ -75,6 +75,21 @@ describe("MailTransportService", () => {
 
     expect(message?.id).toBe("sent-1");
     expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[0]?.[1]).not.toContain("$expand=extensions");
+  });
+
+  it("gets a draft or sent message without an unfiltered extension expand", async () => {
+    const request = vi.fn().mockResolvedValue({
+      id: "message-1",
+      isDraft: false,
+    });
+    const service = new MailTransportService({ request } as never);
+
+    const message = await service.getMessage("mailbox-1", "message/1");
+
+    expect(message?.id).toBe("message-1");
+    expect(request.mock.calls[0]?.[1]).toContain("message%2F1");
+    expect(request.mock.calls[0]?.[1]).not.toContain("$expand=extensions");
   });
 
   it("uses only Graph-supported custom headers for JSON test drafts", async () => {
