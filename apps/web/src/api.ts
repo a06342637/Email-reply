@@ -1,5 +1,10 @@
 export type ApiError = {
-  error?: { code?: string; message?: string; requestId?: string };
+  error?: {
+    code?: string;
+    message?: string;
+    requestId?: string;
+    details?: unknown;
+  };
 };
 
 const initialCsrf = document.cookie.match(
@@ -28,13 +33,29 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok) {
     const body = contentType.includes("json")
-      ? ((await response.json()) as ApiError)
+      ? (((await response.json().catch(() => null)) as ApiError | null) ?? null)
       : null;
+    const diagnostics = [
+      body?.error?.code,
+      body?.error?.requestId ? `请求 ID ${body.error.requestId}` : undefined,
+    ].filter(Boolean);
+    const fallbackMessage = [502, 504].includes(response.status)
+      ? `网关未收到应用的有效响应（HTTP ${response.status}），请检查 app 容器、反向代理超时和服务器出网`
+      : `请求失败（HTTP ${response.status}）`;
     const error = new Error(
-      body?.error?.message || `请求失败（HTTP ${response.status}）`,
-    ) as Error & { code?: string; status?: number };
+      body?.error?.message
+        ? `${body.error.message}${diagnostics.length ? `（${diagnostics.join(" · ")}）` : ""}`
+        : fallbackMessage,
+    ) as Error & {
+      code?: string;
+      status?: number;
+      requestId?: string;
+      details?: unknown;
+    };
     error.code = body?.error?.code;
     error.status = response.status;
+    error.requestId = body?.error?.requestId;
+    error.details = body?.error?.details;
     throw error;
   }
   const value =

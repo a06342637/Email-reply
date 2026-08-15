@@ -1,6 +1,6 @@
 # MailPilot — Microsoft 与 Gmail 邮箱自动回复系统
 
-当前版本：**v0.12**
+当前版本：**v0.13**
 
 [![CI](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml)
 
@@ -8,12 +8,12 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 
 系统不使用 IMAP/SMTP，不保存邮箱密码。收件、发件和 OAuth 都通过 HTTPS 访问 Microsoft 或 Google 官方 API，因此服务器无需开放 993、465 或 587 端口。
 
-> v0.12 新增四类日志/告警独立保留周期与已恢复告警自动清理，并把 Microsoft Entra、Microsoft Refresh Token 和 Google Cloud/Gmail 的完整权限配置步骤直接加入后台。该版本继续通过自动化测试、UI 冒烟、Docker 健康检查和在线升级链路验收；正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据和测试邮箱完成本文末尾的业务验收。
+> v0.13 修复 Microsoft Client ID + Refresh Token 导入可能因 Token Endpoint、`/me`、收件箱和垃圾箱验证超时叠加而被反向代理中断为 502 的问题。交互式导入的 Microsoft 外部验证现在具有 25 秒总预算、阶段化错误码、请求 ID 和安全诊断日志，并并行验证 Microsoft Graph 邮箱能力。正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据和测试邮箱完成本文末尾的业务验收。
 
 ## 目录
 
 - [主要功能](#主要功能)
-- [v0.12 支持范围](#v012-支持范围)
+- [v0.13 支持范围](#v013-支持范围)
 - [系统架构](#系统架构)
 - [网络与服务器要求](#网络与服务器要求)
 - [Debian 一键安装](#debian-一键安装)
@@ -62,7 +62,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - 系统设置内置在线升级：检查正式版本、升级前加密备份、实时进度、健康检查和失败自动回滚。
 - 提供 Debian 安装脚本、改密 CLI、健康检查和命令行升级回滚脚本。
 
-## v0.12 支持范围
+## v0.13 支持范围
 
 支持：
 
@@ -603,10 +603,12 @@ POST /api/v1/microsoft/import-refresh-token
 1. 仅向 `https://login.microsoftonline.com/common/oauth2/v2.0/token` 提交 Client ID 和 Refresh Token。
 2. 换取短期 Access Token；Microsoft 返回轮换后的 Refresh Token 时，以新 Token 替换旧 Token。
 3. 验证授权至少包含 `User.Read`、`Mail.ReadWrite`、`Mail.Send`。
-4. 调用 Microsoft Graph `/me` 识别邮箱，并验证 inbox 与 junkemail 可以读取。
+4. 并行调用 Microsoft Graph `/me`、inbox 与 junkemail，识别邮箱并验证两个文件夹都可以读取。
 5. 全部成功后才创建或更新邮箱；Refresh Token 和 Access Token 使用实例主密钥加密保存。
 
-导入接口不会把 Refresh Token 回显给浏览器，不会写入处理日志、系统日志或审计日志。Client ID 不是秘密，可在邮箱卡片中显示用于识别授权来源。
+交互式导入的 Microsoft 外部验证具有 25 秒总时间预算：Token Endpoint 单次最多等待 12 秒且不叠加后台式重试，Graph 验证单项最多等待 10 秒。超时、限流、权限不足和上游故障都会由应用主动返回 JSON 错误，而不是一直等待到 Nginx、Cloudflare 或其他反向代理中断连接。
+
+导入接口不会把 Refresh Token 回显给浏览器，也不会把 Refresh Token 或 Access Token 写入处理日志、系统日志或审计日志。失败时系统日志只记录验证阶段、耗时、应用错误码、Microsoft 上游状态码和上游错误码，并关联请求 ID。Client ID 不是秘密，可在邮箱卡片中显示用于识别授权来源。
 
 注意：
 
@@ -1283,8 +1285,15 @@ Secret 过期后：
 
 - `MICROSOFT_REFRESH_TOKEN_INVALID`：Token 已过期或撤销、Client ID 不匹配，或者该应用刷新时必须提交 Client Secret。重新取得匹配的 Refresh Token，或改用 OAuth 网页登录。
 - `MICROSOFT_SCOPES_MISSING`：原授权缺少 `User.Read`、`Mail.ReadWrite` 或 `Mail.Send`，必须按完整委托权限重新授权后生成 Refresh Token。
-- `MICROSOFT_MAILBOX_ACCESS_FAILED`：账号可能没有 Exchange Online/Outlook 邮箱、邮箱尚未开通，或 Graph 邮件权限尚未生效。
+- `MICROSOFT_GRAPH_PERMISSION_DENIED`：Microsoft 已接受 Token，但拒绝读取 `/me` 或邮件文件夹。检查三项 Graph 委托权限、管理员同意和邮箱许可证。
+- `MICROSOFT_MAILBOX_NOT_AVAILABLE` / `MICROSOFT_MAILBOX_ACCESS_FAILED`：账号可能没有 Exchange Online/Outlook 邮箱、邮箱尚未开通，或 inbox/junkemail 不可用。
 - `MICROSOFT_TOKEN_RATE_LIMITED`：Microsoft Token Endpoint 暂时限流，按提示稍后重试。
+- `MICROSOFT_TOKEN_REQUEST_REJECTED`：Microsoft 返回了其他 4xx；检查 Client ID、Token 来源、公共客户端设置和完整委托权限。
+- `MICROSOFT_TOKEN_TIMEOUT` / `MICROSOFT_TOKEN_NETWORK_ERROR`：服务器到 `login.microsoftonline.com` 的访问超时或失败；检查 DNS、IPv4/IPv6、出站 443、防火墙和代理。
+- `MICROSOFT_GRAPH_TIMEOUT` / `MICROSOFT_GRAPH_UNAVAILABLE`：服务器到 `graph.microsoft.com` 的访问超时或失败。
+- `MICROSOFT_TOKEN_UPSTREAM_ERROR` / `MICROSOFT_GRAPH_UPSTREAM_ERROR`：Microsoft 官方服务返回 5xx，通常应稍后重试。
+
+错误通知会显示稳定错误码和请求 ID。进入“日志 → 系统日志”，按请求 ID 或事件 `MICROSOFT_REFRESH_TOKEN_IMPORT_FAILED` 查询，可以看到失败阶段 `TOKEN_EXCHANGE`、`PROFILE` 或 `MAILBOX_ACCESS`、耗时和上游状态；日志不会包含任何 Token。v0.13 起 Microsoft 外部验证会在 25 秒内完成或由应用明确返回失败，不应再因应用自身累计 90 秒以上等待而出现代理 502。
 
 不要把 Refresh Token 放进命令行历史、工单截图或聊天记录。若怀疑泄露，应先到 Microsoft/Entra 撤销应用授权，再生成新 Token。
 
@@ -1456,10 +1465,10 @@ http://127.0.0.1:4174
 
 仓库内置 GitHub Actions，会在 Linux/Node.js 22 上重复静态检查，并构建、启动完整 Docker Compose 栈，验证迁移、关键数据库索引、PostgreSQL、Redis、app、worker、健康接口、维护任务和运维 CLI。
 
-当前包含 23 个后端测试文件、89 项自动化测试，覆盖：
+当前包含 27 个后端测试文件、117 项自动化测试，覆盖：
 
 - Graph Token 临时故障和授权失效区分。
-- Microsoft Client ID + Refresh Token 导入、权限校验、Token 轮换、撤销授权、401 强制刷新、并发凭据替换保护和无关 403 隔离。
+- Microsoft Client ID + Refresh Token 导入、25 秒外部验证预算、有限重试、并行 Graph 验证、阶段化错误映射、安全诊断日志、权限校验、Token 轮换、撤销授权、401 强制刷新、并发凭据替换保护和无关 403 隔离。
 - 更换 Microsoft Client ID 时配置、停用与队列清理的事务一致性。
 - Google PKCE OAuth、Refresh Token 刷新、撤销授权、提供商绑定状态和已移除邮箱的跨提供商重连。
 - Gmail History 基线、SPAM 映射、MIME 草稿、附件与无盲重试发送。
@@ -1623,6 +1632,7 @@ v0.09
 v0.10
 v0.11
 v0.12
+v0.13
 ...
 ```
 

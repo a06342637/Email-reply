@@ -118,8 +118,28 @@ describe("MicrosoftService", () => {
       authMode: "CLIENT_ID_REFRESH_TOKEN",
     });
     expect(result).not.toHaveProperty("refreshToken");
+    expect(graph.exchangeImportedRefreshToken).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      "source-refresh-token-value",
+      expect.objectContaining({
+        maxRetries: 0,
+        timeoutMs: 12_000,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(graph.profile).toHaveBeenCalledWith(
+      "access-token",
+      expect.objectContaining({
+        timeoutMs: 10_000,
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(graph.validateMailboxReadAccess).toHaveBeenCalledWith(
       "access-token",
+      expect.objectContaining({
+        timeoutMs: 10_000,
+        signal: expect.any(AbortSignal),
+      }),
     );
     expect(prisma.mailbox.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -135,6 +155,173 @@ describe("MicrosoftService", () => {
       "msal:mailbox-1",
     );
     expect(alerts.resolve).toHaveBeenCalledWith("mailbox-auth:mailbox-1");
+  });
+
+  it("validates the profile and mailbox folders concurrently", async () => {
+    let resolveProfile!: (value: {
+      id: string;
+      mail: string;
+      displayName: string;
+    }) => void;
+    const profile = vi.fn(
+      () =>
+        new Promise<{
+          id: string;
+          mail: string;
+          displayName: string;
+        }>((resolve) => {
+          resolveProfile = resolve;
+        }),
+    );
+    const validateMailboxReadAccess = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      mailbox: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+        upsert: vi.fn().mockResolvedValue({
+          id: "mailbox-1",
+          email: "user@example.com",
+          displayName: "Example User",
+        }),
+      },
+    };
+    const graph = {
+      exchangeImportedRefreshToken: vi.fn().mockResolvedValue({
+        version: 1,
+        accessToken: "access-token",
+        refreshToken: "refresh-token-value",
+        scope: "User.Read Mail.ReadWrite Mail.Send",
+      }),
+      profile,
+      validateMailboxReadAccess,
+      tokenIdentity: vi.fn().mockReturnValue({ objectId: "object-1" }),
+    };
+    const service = new MicrosoftService(
+      prisma as never,
+      { encryptString: vi.fn().mockResolvedValue("encrypted") } as never,
+      {} as never,
+      graph as never,
+      { resolve: vi.fn().mockResolvedValue(undefined) } as never,
+    );
+
+    const pending = service.importRefreshToken({
+      clientId: "11111111-1111-4111-8111-111111111111",
+      refreshToken: "refresh-token-value",
+    });
+
+    await vi.waitFor(() =>
+      expect(validateMailboxReadAccess).toHaveBeenCalledOnce(),
+    );
+    resolveProfile({
+      id: "profile-1",
+      mail: "user@example.com",
+      displayName: "Example User",
+    });
+    await expect(pending).resolves.toMatchObject({ mailboxId: "mailbox-1" });
+  });
+
+  it("maps a Graph permission denial and logs only safe diagnostics", async () => {
+    const createSystemLog = vi.fn().mockResolvedValue({});
+    const prisma = {
+      mailbox: {
+        findUnique: vi.fn(),
+        count: vi.fn(),
+        upsert: vi.fn(),
+      },
+      systemLog: { create: createSystemLog },
+    };
+    const graph = {
+      exchangeImportedRefreshToken: vi.fn().mockResolvedValue({
+        version: 1,
+        accessToken: "access-token-secret-value",
+        refreshToken: "rotated-refresh-token-secret-value",
+        scope: "User.Read Mail.ReadWrite Mail.Send",
+      }),
+      profile: vi
+        .fn()
+        .mockRejectedValue(
+          new GraphError(
+            403,
+            "ErrorAccessDenied",
+            "denied access-token-secret-value",
+          ),
+        ),
+      validateMailboxReadAccess: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new MicrosoftService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      graph as never,
+      {} as never,
+    );
+
+    await expect(
+      service.importRefreshToken(
+        {
+          clientId: "11111111-1111-4111-8111-111111111111",
+          refreshToken: "source-refresh-token-secret-value",
+        },
+        { requestId: "request-1" },
+      ),
+    ).rejects.toMatchObject({
+      code: "MICROSOFT_GRAPH_PERMISSION_DENIED",
+      status: 409,
+      details: {
+        stage: "PROFILE",
+        upstreamStatus: 403,
+        upstreamCode: "ErrorAccessDenied",
+      },
+    });
+    expect(createSystemLog).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        component: "microsoft",
+        event: "MICROSOFT_REFRESH_TOKEN_IMPORT_FAILED",
+        requestId: "request-1",
+        metadata: expect.objectContaining({
+          stage: "PROFILE",
+          upstreamStatus: 403,
+          upstreamCode: "ErrorAccessDenied",
+        }),
+      }),
+    });
+    const logged = JSON.stringify(createSystemLog.mock.calls[0]);
+    expect(logged).not.toContain("source-refresh-token-secret-value");
+    expect(logged).not.toContain("rotated-refresh-token-secret-value");
+    expect(logged).not.toContain("access-token-secret-value");
+    expect(prisma.mailbox.upsert).not.toHaveBeenCalled();
+  });
+
+  it("returns a bounded timeout error instead of a generic 502", async () => {
+    const createSystemLog = vi.fn().mockResolvedValue({});
+    const service = new MicrosoftService(
+      { systemLog: { create: createSystemLog } } as never,
+      {} as never,
+      {} as never,
+      {
+        exchangeImportedRefreshToken: vi
+          .fn()
+          .mockRejectedValue(
+            new GraphError(0, "MICROSOFT_OAUTH_TIMEOUT", "request timed out"),
+          ),
+      } as never,
+      {} as never,
+    );
+
+    await expect(
+      service.importRefreshToken(
+        {
+          clientId: "11111111-1111-4111-8111-111111111111",
+          refreshToken: "refresh-token-value",
+        },
+        { requestId: "request-timeout" },
+      ),
+    ).rejects.toMatchObject({
+      code: "MICROSOFT_TOKEN_TIMEOUT",
+      status: 504,
+      details: expect.objectContaining({ stage: "TOKEN_EXCHANGE" }),
+    });
+    expect(createSystemLog).toHaveBeenCalledOnce();
   });
 
   it("rejects an invalid imported Refresh Token before writing a mailbox", async () => {
@@ -190,8 +377,8 @@ describe("MicrosoftService", () => {
         .mockRejectedValue(
           new GraphError(
             400,
-            "invalid_grant",
-            "The request was denied because one or more scopes requested are unauthorized or expired. The user must first sign in and grant the client application access to the requested scope.",
+            "invalid_scope",
+            "The requested Microsoft Graph scope is invalid or has not been granted.",
           ),
         ),
     };

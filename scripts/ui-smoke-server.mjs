@@ -23,7 +23,7 @@ let smokeSettings = {
   dedupeDays: 365,
   sessionIdleMinutes: 120,
   sessionAbsoluteMinutes: 720,
-  version: "0.12",
+  version: "0.13",
 };
 
 const template = {
@@ -227,13 +227,27 @@ function api(path, method, body, res) {
       manualMicrosoftMailbox,
     ]);
   }
-  if (path === "/api/v1/microsoft/import-refresh-token" && method === "POST")
+  if (path === "/api/v1/microsoft/import-refresh-token" && method === "POST") {
+    if (body?.refreshToken === "simulate-microsoft-timeout")
+      return json(
+        res,
+        {
+          error: {
+            code: "MICROSOFT_TOKEN_TIMEOUT",
+            message: "连接 Microsoft Token Endpoint 超时，系统已停止等待",
+            requestId: "smoke-request-timeout",
+            details: { stage: "TOKEN_EXCHANGE" },
+          },
+        },
+        504,
+      );
     return json(res, {
       mailboxId: "mailbox-imported-1",
       email: "imported@example.com",
       displayName: "导入测试邮箱",
       authMode: "CLIENT_ID_REFRESH_TOKEN",
     });
+  }
   if (path === "/api/v1/mailboxes/mailbox-1" && method === "DELETE") {
     mailboxRemoved = true;
     return json(res, { ok: true });
@@ -301,7 +315,7 @@ function api(path, method, body, res) {
     });
   if (path === "/api/v1/system/info")
     return json(res, {
-      version: "0.12",
+      version: "0.13",
       node: process.version,
       database: true,
       redis: true,
@@ -316,8 +330,8 @@ function api(path, method, body, res) {
       phase: "UP_TO_DATE",
       busy: false,
       progress: 100,
-      currentVersion: "0.12",
-      latestVersion: "0.12",
+      currentVersion: "0.13",
+      latestVersion: "0.13",
       updateAvailable: false,
       message: "当前已经是最新正式版本",
       checkedAt: now,
@@ -331,14 +345,14 @@ function api(path, method, body, res) {
       rollbackImage: null,
       error: null,
       logs: ["当前已是最新版本"],
-      updaterVersion: "0.12",
+      updaterVersion: "0.13",
     });
   if (path === "/api/v1/update/check")
     return json(res, {
       phase: "AVAILABLE",
       busy: false,
       progress: 100,
-      currentVersion: "0.12",
+      currentVersion: "0.13",
       latestVersion: "0.08",
       updateAvailable: true,
       message: "发现正式版本 v0.08",
@@ -353,7 +367,7 @@ function api(path, method, body, res) {
       rollbackImage: null,
       error: null,
       logs: ["开始检查更新", "发现 v0.08"],
-      updaterVersion: "0.12",
+      updaterVersion: "0.13",
     });
   if (path === "/api/v1/update/apply")
     return json(

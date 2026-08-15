@@ -61,7 +61,9 @@ export class MicrosoftController {
     @Body() body: MicrosoftRefreshTokenImportDto,
     @Req() req: Request,
   ) {
-    const result = await this.microsoft.importRefreshToken(body);
+    const result = await this.microsoft.importRefreshToken(body, {
+      requestId: req.requestId,
+    });
     await this.audit.write(
       "MICROSOFT_REFRESH_TOKEN_IMPORTED",
       req,

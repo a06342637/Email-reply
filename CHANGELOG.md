@@ -1,5 +1,16 @@
 # 更新日志
 
+## v0.13 - 2026-08-16
+
+- 修复 Microsoft Client ID + Refresh Token 导入在 Token Endpoint、`/me`、inbox 和 junkemail 超时叠加时，可能先被 Nginx/Cloudflare 中断并显示通用 HTTP 502 的问题。
+- 交互式导入的 Microsoft 外部验证新增 25 秒总预算：Token 请求单次最多 12 秒且不叠加后台重试，Graph 验证单项最多 10 秒；后台 Worker 的长期令牌刷新策略保持不变。
+- `/me`、inbox 和 junkemail 改为并行验证；任一阶段失败会终止其余验证请求，避免无意义等待。
+- Microsoft Token Endpoint 与 Graph 错误现在保留安全的上游状态码、错误码和 `Retry-After`，并映射为权限不足、限流、网络失败、上游故障或明确的 504 超时错误。
+- 导入失败新增系统日志事件 `MICROSOFT_REFRESH_TOKEN_IMPORT_FAILED`，仅记录阶段、耗时、请求 ID 和脱敏诊断字段；Refresh Token、Access Token 与上游错误正文不会进入日志。
+- 后台错误提示新增稳定错误码和请求 ID；反向代理返回非 JSON 502/504 时会提示检查 app、代理超时和服务器出网，Microsoft 高级导入说明同步标注并行验证及时间上限。
+- 新增有限重试、Token 超时、Graph 权限错误、文件夹并行校验、跨步骤并行校验和日志不泄露 Token 的回归测试；当前共 27 个测试文件、117 项后端测试。
+- README 与版本元数据同步更新；版本升级为 v0.13（npm 0.0.13）。
+
 ## v0.12 - 2026-08-16
 
 - 系统设置新增“告警记录”独立保留周期；处理日志、系统日志、已恢复告警和审计日志现在可分别配置 1–3650 天，Worker 每天自动删除超期记录。

@@ -35,6 +35,16 @@ type MicrosoftTokenResponse = {
   error_description?: string;
 };
 
+/** Options used by short-lived, user-facing Microsoft requests. */
+export type MicrosoftGraphRequestOptions = {
+  /** An optional signal shared by all steps of one user-facing operation. */
+  signal?: AbortSignal;
+  /** Per-request timeout. The caller may still impose a shorter total budget. */
+  timeoutMs?: number;
+  /** Retries for transient failures. Interactive imports normally use zero. */
+  maxRetries?: number;
+};
+
 type MicrosoftMailboxTokenRecord = {
   id: string;
   provider: "MICROSOFT" | "GOOGLE";
@@ -114,10 +124,12 @@ export class GraphService {
   async exchangeImportedRefreshToken(
     clientId: string,
     refreshToken: string,
+    options: MicrosoftGraphRequestOptions = {},
   ): Promise<MicrosoftRefreshTokenCache> {
     const response = await this.requestRefreshToken(
       clientId.trim(),
       refreshToken.trim(),
+      options,
     );
     if (!response.access_token)
       throw new GraphError(
@@ -484,50 +496,31 @@ export class GraphService {
     return new ConfidentialClientApplication(configuration);
   }
 
-  async profile(accessToken: string): Promise<{
+  async profile(
+    accessToken: string,
+    options: MicrosoftGraphRequestOptions = {},
+  ): Promise<{
     id: string;
     displayName?: string;
     mail?: string;
     userPrincipalName?: string;
   }> {
-    let response: Response;
-    try {
-      response = await fetch(
-        "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName",
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            Accept: "application/json",
-          },
-          signal: AbortSignal.timeout(30_000),
-        },
-      );
-    } catch {
-      throw new AppError(
-        "MICROSOFT_PROFILE_FAILED",
-        "无法连接 Microsoft Graph 读取邮箱资料",
-        502,
-      );
-    }
-    if (!response.ok)
-      throw new AppError(
-        "MICROSOFT_PROFILE_FAILED",
-        "无法读取 Microsoft 邮箱资料",
-        502,
-      );
-    const profile = (await response.json().catch(() => undefined)) as
-      | {
-          id?: string;
-          displayName?: string;
-          mail?: string;
-          userPrincipalName?: string;
-        }
-      | undefined;
+    const profile = await this.verificationRequest<{
+      id?: string;
+      displayName?: string;
+      mail?: string;
+      userPrincipalName?: string;
+    }>(
+      "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName",
+      accessToken,
+      "PROFILE",
+      options,
+    );
     if (!profile?.id)
-      throw new AppError(
+      throw new GraphError(
+        502,
         "MICROSOFT_PROFILE_INVALID",
         "Microsoft 返回的邮箱资料无效",
-        502,
       );
     return profile as {
       id: string;
@@ -537,35 +530,22 @@ export class GraphService {
     };
   }
 
-  async validateMailboxReadAccess(accessToken: string): Promise<void> {
-    const folders = ["inbox", "junkemail"];
-    for (const folder of folders) {
-      let response: Response;
-      try {
-        response = await fetch(
+  async validateMailboxReadAccess(
+    accessToken: string,
+    options: MicrosoftGraphRequestOptions = {},
+  ): Promise<void> {
+    // Inbox and junk-email checks are independent. Running them together keeps
+    // a slow folder endpoint from doubling the time of an interactive import.
+    await Promise.all(
+      ["inbox", "junkemail"].map((folder) =>
+        this.verificationRequest(
           `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}?$select=id`,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              Accept: "application/json",
-            },
-            signal: AbortSignal.timeout(30_000),
-          },
-        );
-      } catch {
-        throw new AppError(
-          "MICROSOFT_MAILBOX_ACCESS_FAILED",
-          "无法连接 Microsoft Graph 验证邮箱读取权限",
-          502,
-        );
-      }
-      if (!response.ok)
-        throw new AppError(
-          "MICROSOFT_MAILBOX_ACCESS_FAILED",
-          "该账户无法读取 Microsoft 收件箱或垃圾箱，请确认存在可用邮箱并已授予 Mail.ReadWrite",
-          response.status === 401 || response.status === 403 ? 409 : 502,
-        );
-    }
+          accessToken,
+          "MAILBOX_ACCESS",
+          options,
+        ),
+      ),
+    );
   }
 
   private async readRefreshTokenCache(
@@ -623,6 +603,7 @@ export class GraphService {
   private async requestRefreshToken(
     clientId: string,
     refreshToken: string,
+    options: MicrosoftGraphRequestOptions = {},
   ): Promise<MicrosoftTokenResponse> {
     if (!clientId || !refreshToken)
       throw new AppError(
@@ -630,6 +611,8 @@ export class GraphService {
         "Client ID 和 Refresh Token 不能为空",
         400,
       );
+    const maxRetries = options.maxRetries ?? 2;
+    const timeoutMs = options.timeoutMs ?? 30_000;
     let attempt = 0;
     while (true) {
       let response: Response;
@@ -643,31 +626,73 @@ export class GraphService {
             grant_type: "refresh_token",
             scope: REFRESH_TOKEN_SCOPES.join(" "),
           }),
-          signal: AbortSignal.timeout(30_000),
+          signal: this.requestSignal(timeoutMs, options.signal),
         });
       } catch (error) {
-        if (attempt++ < 2) {
-          await sleep(Math.min(8_000, 1_000 * 2 ** attempt));
+        if (options.signal?.aborted)
+          throw new GraphError(
+            0,
+            "MICROSOFT_OAUTH_TIMEOUT",
+            "Microsoft OAuth 令牌验证超过总时间限制",
+          );
+        if (attempt++ < maxRetries) {
+          await this.retrySleep(
+            Math.min(8_000, 1_000 * 2 ** attempt),
+            options.signal,
+          );
           continue;
         }
         throw new GraphError(
           0,
-          "MICROSOFT_OAUTH_NETWORK_ERROR",
-          error instanceof Error
-            ? error.message
-            : "Microsoft OAuth network error",
+          this.isAbortError(error)
+            ? "MICROSOFT_OAUTH_TIMEOUT"
+            : "MICROSOFT_OAUTH_NETWORK_ERROR",
+          this.isAbortError(error)
+            ? "Microsoft OAuth 令牌请求超时"
+            : "无法连接 Microsoft OAuth 令牌服务",
         );
       }
-      const result = (await response
-        .json()
-        .catch(() => ({}))) as MicrosoftTokenResponse;
+      let result: MicrosoftTokenResponse;
+      try {
+        result = (await response.json()) as MicrosoftTokenResponse;
+      } catch (error) {
+        if (options.signal?.aborted)
+          throw new GraphError(
+            0,
+            "MICROSOFT_OAUTH_TIMEOUT",
+            "Microsoft OAuth 令牌响应读取超时",
+          );
+        if (attempt++ < maxRetries) {
+          await this.retrySleep(
+            Math.min(8_000, 1_000 * 2 ** attempt),
+            options.signal,
+          );
+          continue;
+        }
+        if (this.isAbortError(error))
+          throw new GraphError(
+            0,
+            "MICROSOFT_OAUTH_TIMEOUT",
+            "Microsoft OAuth 令牌响应读取超时",
+          );
+        if (response.ok)
+          throw new GraphError(
+            502,
+            "MICROSOFT_OAUTH_INVALID_RESPONSE",
+            "Microsoft OAuth 返回了无法解析的令牌响应",
+          );
+        result = {};
+      }
       if (response.ok) return result;
       const retryAfter = this.retryAfter(response);
       if (
         (response.status === 429 || response.status >= 500) &&
-        attempt++ < 2
+        attempt++ < maxRetries
       ) {
-        await sleep((retryAfter ?? Math.min(8, 2 ** attempt)) * 1_000);
+        await this.retrySleep(
+          (retryAfter ?? Math.min(8, 2 ** attempt)) * 1_000,
+          options.signal,
+        );
         continue;
       }
       throw new GraphError(
@@ -805,6 +830,96 @@ export class GraphService {
       homeAccountId: mailbox.homeAccountId,
       tokenCacheEncrypted,
     };
+  }
+
+  private async verificationRequest<T>(
+    url: string,
+    accessToken: string,
+    operation: "PROFILE" | "MAILBOX_ACCESS",
+    options: MicrosoftGraphRequestOptions,
+  ): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          Prefer: 'IdType="ImmutableId"',
+        },
+        signal: this.requestSignal(options.timeoutMs ?? 20_000, options.signal),
+      });
+    } catch (error) {
+      const timeout = options.signal?.aborted || this.isAbortError(error);
+      throw new GraphError(
+        0,
+        `MICROSOFT_${operation}_${timeout ? "TIMEOUT" : "NETWORK_ERROR"}`,
+        timeout
+          ? "Microsoft Graph 邮箱验证请求超时"
+          : "无法连接 Microsoft Graph 验证邮箱",
+      );
+    }
+
+    let bodyText: string;
+    try {
+      bodyText = await response.text();
+    } catch (error) {
+      const timeout = options.signal?.aborted || this.isAbortError(error);
+      throw new GraphError(
+        0,
+        `MICROSOFT_${operation}_${timeout ? "TIMEOUT" : "NETWORK_ERROR"}`,
+        timeout
+          ? "Microsoft Graph 邮箱验证响应读取超时"
+          : "读取 Microsoft Graph 邮箱验证响应失败",
+      );
+    }
+    let body: unknown;
+    try {
+      body = bodyText ? JSON.parse(bodyText) : undefined;
+    } catch {
+      body = bodyText;
+    }
+    if (!response.ok) {
+      const graphBody = body as {
+        error?: { code?: string; message?: string };
+      };
+      throw new GraphError(
+        response.status,
+        graphBody?.error?.code ?? `HTTP_${response.status}`,
+        (
+          graphBody?.error?.message ??
+          `Microsoft Graph verification failed (${response.status})`
+        )
+          .replace(/[\r\n]+/g, " ")
+          .slice(0, 1_000),
+        this.retryAfter(response),
+      );
+    }
+    return body as T;
+  }
+
+  private requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+    const timeoutSignal = AbortSignal.timeout(Math.max(1, timeoutMs));
+    return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  }
+
+  private async retrySleep(ms: number, signal?: AbortSignal): Promise<void> {
+    try {
+      await sleep(ms, undefined, signal ? { signal } : undefined);
+    } catch (error) {
+      if (signal?.aborted)
+        throw new GraphError(
+          0,
+          "MICROSOFT_OAUTH_TIMEOUT",
+          "Microsoft OAuth 令牌验证超过总时间限制",
+        );
+      throw error;
+    }
+  }
+
+  private isAbortError(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const name = "name" in error ? String(error.name) : "";
+    return name === "AbortError" || name === "TimeoutError";
   }
 
   private retryAfter(response: Response): number | undefined {

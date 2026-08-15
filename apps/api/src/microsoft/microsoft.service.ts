@@ -14,6 +14,25 @@ import {
 import { AlertService } from "../observability/alert.service.js";
 
 const OAUTH_SCOPES = ["openid", "profile", "offline_access", ...GRAPH_SCOPES];
+const MICROSOFT_IMPORT_TOTAL_TIMEOUT_MS = 25_000;
+const MICROSOFT_IMPORT_TOKEN_TIMEOUT_MS = 12_000;
+const MICROSOFT_IMPORT_GRAPH_TIMEOUT_MS = 10_000;
+
+type MicrosoftImportStage = "TOKEN_EXCHANGE" | "PROFILE" | "MAILBOX_ACCESS";
+
+class MicrosoftImportStageError extends Error {
+  constructor(
+    readonly stage: MicrosoftImportStage,
+    readonly originalError: unknown,
+  ) {
+    super(
+      originalError instanceof Error
+        ? originalError.message
+        : "Microsoft import stage failed",
+    );
+    this.name = "MicrosoftImportStageError";
+  }
+}
 
 @Injectable()
 export class MicrosoftService {
@@ -290,8 +309,35 @@ export class MicrosoftService {
         "Microsoft 未返回有效账户授权",
         502,
       );
-    const profile = await this.graph.profile(result.accessToken);
-    await this.graph.validateMailboxReadAccess(result.accessToken);
+    let profile: {
+      id: string;
+      displayName?: string;
+      mail?: string;
+      userPrincipalName?: string;
+    };
+    const mailboxVerificationController = new AbortController();
+    try {
+      [profile] = await Promise.all([
+        this.runImportStage("PROFILE", () =>
+          this.graph.profile(result.accessToken, {
+            signal: mailboxVerificationController.signal,
+          }),
+        ),
+        this.runImportStage("MAILBOX_ACCESS", () =>
+          this.graph.validateMailboxReadAccess(result.accessToken, {
+            signal: mailboxVerificationController.signal,
+          }),
+        ),
+      ]);
+    } catch (error) {
+      mailboxVerificationController.abort();
+      const staged =
+        error instanceof MicrosoftImportStageError
+          ? error
+          : new MicrosoftImportStageError("PROFILE", error);
+      throw this.mapImportFailure(staged.stage, staged.originalError);
+    }
+    mailboxVerificationController.abort();
     const email = (
       profile.mail ||
       profile.userPrincipalName ||
@@ -382,10 +428,13 @@ export class MicrosoftService {
     };
   }
 
-  async importRefreshToken(input: {
-    clientId: string;
-    refreshToken: string;
-  }): Promise<{
+  async importRefreshToken(
+    input: {
+      clientId: string;
+      refreshToken: string;
+    },
+    context: { requestId?: string } = {},
+  ): Promise<{
     mailboxId: string;
     email: string;
     displayName: string;
@@ -393,50 +442,32 @@ export class MicrosoftService {
   }> {
     const clientId = input.clientId.trim();
     const refreshToken = input.refreshToken.trim();
+    const startedAt = Date.now();
+    const operationController = new AbortController();
+    const operationSignal = AbortSignal.any([
+      operationController.signal,
+      AbortSignal.timeout(MICROSOFT_IMPORT_TOTAL_TIMEOUT_MS),
+    ]);
     let token: MicrosoftRefreshTokenCache;
     try {
       token = await this.graph.exchangeImportedRefreshToken(
         clientId,
         refreshToken,
+        {
+          signal: operationSignal,
+          timeoutMs: MICROSOFT_IMPORT_TOKEN_TIMEOUT_MS,
+          // This is an interactive request. Returning a precise failure is
+          // safer than stacking retries until the reverse proxy times out.
+          maxRetries: 0,
+        },
       );
     } catch (error) {
-      if (error instanceof AppError) throw error;
-      if (error instanceof GraphError) {
-        if (
-          [400, 401].includes(error.status) &&
-          /one or more scopes requested are unauthorized|must first sign in and grant/i.test(
-            `${error.code} ${error.message}`,
-          )
-        )
-          throw new AppError(
-            "MICROSOFT_GRAPH_SCOPES_REQUIRED",
-            "Refresh Token 未授予 Microsoft Graph 的 User.Read、Mail.ReadWrite 和 Mail.Send，请重新授权并生成新的 Refresh Token",
-            400,
-            { requiredScopes: ["User.Read", "Mail.ReadWrite", "Mail.Send"] },
-          );
-        if (
-          [400, 401].includes(error.status) &&
-          /invalid_grant|invalid_client|unauthorized_client|interaction_required|consent_required/i.test(
-            `${error.code} ${error.message}`,
-          )
-        )
-          throw new AppError(
-            "MICROSOFT_REFRESH_TOKEN_INVALID",
-            "Refresh Token 无效、已撤销、不属于该 Client ID，或此应用不允许无 Client Secret 刷新",
-            400,
-          );
-        if (error.status === 429)
-          throw new AppError(
-            "MICROSOFT_TOKEN_RATE_LIMITED",
-            "Microsoft 暂时限制了令牌验证，请稍后重试",
-            429,
-            { retryAfterSeconds: error.retryAfterSeconds },
-          );
-      }
-      throw new AppError(
-        "MICROSOFT_REFRESH_TOKEN_VERIFY_FAILED",
-        "暂时无法向 Microsoft 验证 Refresh Token，请稍后重试",
-        502,
+      operationController.abort();
+      throw await this.importFailure(
+        "TOKEN_EXCHANGE",
+        startedAt,
+        error,
+        context.requestId,
       );
     }
 
@@ -447,8 +478,41 @@ export class MicrosoftService {
         "Microsoft 未返回有效访问令牌",
         502,
       );
-    const profile = await this.graph.profile(accessToken);
-    await this.graph.validateMailboxReadAccess(accessToken);
+    let profile: {
+      id: string;
+      displayName?: string;
+      mail?: string;
+      userPrincipalName?: string;
+    };
+    try {
+      [profile] = await Promise.all([
+        this.runImportStage("PROFILE", () =>
+          this.graph.profile(accessToken, {
+            signal: operationSignal,
+            timeoutMs: MICROSOFT_IMPORT_GRAPH_TIMEOUT_MS,
+          }),
+        ),
+        this.runImportStage("MAILBOX_ACCESS", () =>
+          this.graph.validateMailboxReadAccess(accessToken, {
+            signal: operationSignal,
+            timeoutMs: MICROSOFT_IMPORT_GRAPH_TIMEOUT_MS,
+          }),
+        ),
+      ]);
+    } catch (error) {
+      operationController.abort();
+      const staged =
+        error instanceof MicrosoftImportStageError
+          ? error
+          : new MicrosoftImportStageError("PROFILE", error);
+      throw await this.importFailure(
+        staged.stage,
+        startedAt,
+        staged.originalError,
+        context.requestId,
+      );
+    }
+    operationController.abort();
     const email = (profile.mail || profile.userPrincipalName || "")
       .trim()
       .toLowerCase();
@@ -532,6 +596,222 @@ export class MicrosoftService {
       displayName: mailbox.displayName,
       authMode: "CLIENT_ID_REFRESH_TOKEN",
     };
+  }
+
+  private async runImportStage<T>(
+    stage: MicrosoftImportStage,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      throw new MicrosoftImportStageError(stage, error);
+    }
+  }
+
+  private async importFailure(
+    stage: MicrosoftImportStage,
+    startedAt: number,
+    error: unknown,
+    requestId?: string,
+  ): Promise<AppError> {
+    const mapped = this.mapImportFailure(stage, error);
+    const metadata: Record<string, string | number> = {
+      stage,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      errorCode: mapped.code,
+      httpStatus: mapped.status,
+    };
+    if (error instanceof GraphError) {
+      metadata.upstreamCode = error.code.slice(0, 200);
+      if (error.status > 0) metadata.upstreamStatus = error.status;
+      if (error.retryAfterSeconds)
+        metadata.retryAfterSeconds = error.retryAfterSeconds;
+    }
+    const systemLog = (
+      this.prisma as unknown as {
+        systemLog?: {
+          create(args: unknown): Promise<unknown>;
+        };
+      }
+    ).systemLog;
+    if (systemLog)
+      await systemLog
+        .create({
+          data: {
+            level: mapped.status >= 500 ? "ERROR" : "WARN",
+            component: "microsoft",
+            event: "MICROSOFT_REFRESH_TOKEN_IMPORT_FAILED",
+            message: `Microsoft Refresh Token 导入失败（${stage}）：${mapped.code}`,
+            requestId,
+            metadata,
+          },
+        })
+        .catch(() => undefined);
+    return mapped;
+  }
+
+  private mapImportFailure(
+    stage: MicrosoftImportStage,
+    error: unknown,
+  ): AppError {
+    if (error instanceof AppError) return error;
+    if (!(error instanceof GraphError))
+      return new AppError(
+        "MICROSOFT_REFRESH_TOKEN_VERIFY_FAILED",
+        "Microsoft 邮箱验证出现未知错误，请根据请求 ID 查看系统日志",
+        502,
+        { stage },
+      );
+
+    const details = this.importErrorDetails(stage, error);
+    const errorText = `${error.code} ${error.message}`;
+    const timedOut = /TIMEOUT/i.test(error.code);
+
+    if (stage === "TOKEN_EXCHANGE") {
+      if (
+        [400, 401].includes(error.status) &&
+        /invalid_scope|consent_required|AADSTS65001|one or more scopes requested are unauthorized|must first sign in and grant/i.test(
+          errorText,
+        )
+      )
+        return new AppError(
+          "MICROSOFT_GRAPH_SCOPES_REQUIRED",
+          "Refresh Token 未授予 Microsoft Graph 的 User.Read、Mail.ReadWrite 和 Mail.Send，请重新授权并生成新的 Refresh Token",
+          400,
+          {
+            ...details,
+            requiredScopes: ["User.Read", "Mail.ReadWrite", "Mail.Send"],
+          },
+        );
+      if (
+        [400, 401].includes(error.status) &&
+        /invalid_grant|invalid_client|unauthorized_client|interaction_required/i.test(
+          errorText,
+        )
+      )
+        return new AppError(
+          "MICROSOFT_REFRESH_TOKEN_INVALID",
+          "Refresh Token 无效、已撤销、不属于该 Client ID，或此应用不允许无 Client Secret 刷新",
+          400,
+          details,
+        );
+      if (error.status === 429)
+        return new AppError(
+          "MICROSOFT_TOKEN_RATE_LIMITED",
+          "Microsoft 暂时限制了令牌验证，请按提示稍后重试",
+          429,
+          details,
+        );
+      if (timedOut)
+        return new AppError(
+          "MICROSOFT_TOKEN_TIMEOUT",
+          "连接 Microsoft Token Endpoint 超时，系统已停止等待；请检查服务器出网、DNS 和代理后重试",
+          504,
+          details,
+        );
+      if (error.status >= 500)
+        return new AppError(
+          "MICROSOFT_TOKEN_UPSTREAM_ERROR",
+          "Microsoft Token Endpoint 暂时不可用，请稍后重试",
+          502,
+          details,
+        );
+      if (error.status === 0)
+        return new AppError(
+          "MICROSOFT_TOKEN_NETWORK_ERROR",
+          "服务器无法连接 Microsoft Token Endpoint，请检查出网、DNS、IPv6 和防火墙",
+          502,
+          details,
+        );
+      if (error.status >= 400 && error.status < 500)
+        return new AppError(
+          "MICROSOFT_TOKEN_REQUEST_REJECTED",
+          "Microsoft 拒绝了令牌请求，请检查 Client ID、Refresh Token 来源、委托权限和应用类型",
+          400,
+          details,
+        );
+      return new AppError(
+        "MICROSOFT_REFRESH_TOKEN_VERIFY_FAILED",
+        "Microsoft 拒绝了 Refresh Token 验证，请检查 Client ID、Token 来源和应用类型",
+        502,
+        details,
+      );
+    }
+
+    if (error.status === 401 || error.status === 403)
+      return new AppError(
+        "MICROSOFT_GRAPH_PERMISSION_DENIED",
+        "Microsoft 拒绝读取邮箱，请确认 Token 已授予 User.Read、Mail.ReadWrite、Mail.Send 委托权限，并确认账户已开通 Outlook/Exchange 邮箱",
+        409,
+        details,
+      );
+    if (stage === "MAILBOX_ACCESS" && error.status === 404)
+      return new AppError(
+        "MICROSOFT_MAILBOX_NOT_AVAILABLE",
+        "Microsoft 账户中找不到可用的收件箱或垃圾箱，请确认邮箱服务已开通",
+        409,
+        details,
+      );
+    if (error.status === 429)
+      return new AppError(
+        "MICROSOFT_GRAPH_RATE_LIMITED",
+        "Microsoft Graph 暂时限流，请按提示稍后重试",
+        429,
+        details,
+      );
+    if (timedOut)
+      return new AppError(
+        "MICROSOFT_GRAPH_TIMEOUT",
+        "Microsoft Graph 邮箱验证超时，系统已停止等待；请检查服务器到 graph.microsoft.com 的网络",
+        504,
+        details,
+      );
+    if (error.status === 0)
+      return new AppError(
+        "MICROSOFT_GRAPH_UNAVAILABLE",
+        "服务器无法连接 Microsoft Graph，请检查出网、DNS、IPv6 和防火墙",
+        502,
+        details,
+      );
+    if (error.code === "MICROSOFT_PROFILE_INVALID")
+      return new AppError(
+        "MICROSOFT_PROFILE_INVALID",
+        "Microsoft 返回的邮箱资料无效，无法确认邮箱身份",
+        502,
+        details,
+      );
+    if (error.status >= 500)
+      return new AppError(
+        "MICROSOFT_GRAPH_UPSTREAM_ERROR",
+        "Microsoft Graph 暂时不可用，请稍后重试",
+        502,
+        details,
+      );
+    return new AppError(
+      stage === "PROFILE"
+        ? "MICROSOFT_PROFILE_FAILED"
+        : "MICROSOFT_MAILBOX_ACCESS_FAILED",
+      stage === "PROFILE"
+        ? "无法读取 Microsoft 邮箱资料，请确认 User.Read 委托权限"
+        : "无法读取 Microsoft 收件箱或垃圾箱，请确认 Mail.ReadWrite 委托权限和邮箱状态",
+      409,
+      details,
+    );
+  }
+
+  private importErrorDetails(
+    stage: MicrosoftImportStage,
+    error: GraphError,
+  ): Record<string, string | number> {
+    const details: Record<string, string | number> = {
+      stage,
+      upstreamCode: error.code.slice(0, 200),
+    };
+    if (error.status > 0) details.upstreamStatus = error.status;
+    if (error.retryAfterSeconds)
+      details.retryAfterSeconds = error.retryAfterSeconds;
+    return details;
   }
 
   async publicUrl(): Promise<string> {

@@ -365,7 +365,7 @@ export function MailboxesPage() {
               </div>
               <p>
                 系统先在 Microsoft 官方 Token Endpoint 换取 Access
-                Token，校验委托权限并读取 /me；全部成功后才保存邮箱。
+                Token，再并行校验 /me、收件箱和垃圾箱；全部成功后才保存邮箱。
               </p>
               <ul>
                 <li>Refresh Token 必须由同一个 Client ID 签发</li>
@@ -410,7 +410,9 @@ export function MailboxesPage() {
                 />
                 <small>
                   如果 Token 缺少权限、已撤销、不属于该 Client ID，或刷新时要求
-                  Client Secret，系统会拒绝导入且不会保存半成品邮箱。
+                  Client
+                  Secret，系统会拒绝导入且不会保存半成品邮箱。验证有明确时间上限，超时会返回阶段、错误码和请求
+                  ID。
                 </small>
               </label>
               <button

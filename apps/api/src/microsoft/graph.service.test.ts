@@ -301,6 +301,80 @@ describe("GraphService token handling", () => {
     ).rejects.toMatchObject({ code: "MICROSOFT_SCOPES_MISSING" });
   });
 
+  it("does not stack retries for an interactive token import", async () => {
+    const { service } = fixture();
+    const timeout = Object.assign(new Error("request timed out"), {
+      name: "TimeoutError",
+    });
+    const fetchMock = vi.fn().mockRejectedValue(timeout);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      service.exchangeImportedRefreshToken(
+        "11111111-1111-4111-8111-111111111111",
+        "refresh-token-value-that-is-long-enough",
+        { maxRetries: 0, timeoutMs: 50 },
+      ),
+    ).rejects.toMatchObject({
+      code: "MICROSOFT_OAUTH_TIMEOUT",
+      status: 0,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the Graph status and error code for profile failures", async () => {
+    const { service } = fixture();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "ErrorAccessDenied",
+              message: "The caller does not have permission",
+            },
+          }),
+          {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      ),
+    );
+
+    await expect(service.profile("access-token")).rejects.toMatchObject({
+      status: 403,
+      code: "ErrorAccessDenied",
+      message: "The caller does not have permission",
+    });
+  });
+
+  it("checks inbox and junk-email access in parallel", async () => {
+    const { service } = fixture();
+    const resolvers: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = service.validateMailboxReadAccess("access-token");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    for (const resolve of resolvers)
+      resolve(
+        new Response(JSON.stringify({ id: "folder-id" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("inbox");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("junkemail");
+  });
+
   it("does not mark a mailbox auth-required for an unrelated Graph 403", async () => {
     const { service } = fixture();
     vi.spyOn(service, "accessToken").mockResolvedValue("access-token");
