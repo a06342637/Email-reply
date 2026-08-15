@@ -21,6 +21,13 @@ type GraphMessagePage = {
   "@odata.nextLink"?: string;
 };
 
+type GraphAttachmentSummary = {
+  name?: string;
+  size?: number;
+  contentType?: string | null;
+  isInline?: boolean;
+};
+
 const TRACKING_EXTENSION = "Com.MailPilot.AutoReply";
 const TRACKING_LOOKUP_WINDOW_MS = 15 * 60_000;
 const TRACKING_LOOKUP_MAX_PAGES = 20;
@@ -109,6 +116,8 @@ export class MailTransportService {
     draftId: string,
     assets: TemplateAsset[],
   ): Promise<void> {
+    if (assets.length === 0) return;
+
     const existing = await this.listAttachments(mailboxId, draftId);
     const matchedExisting = new Set<number>();
     for (const asset of assets) {
@@ -117,7 +126,8 @@ export class MailTransportService {
           !matchedExisting.has(index) &&
           item.name === asset.fileName &&
           item.size === asset.size &&
-          (item.contentId || null) === (asset.contentId || null),
+          item.contentType === asset.contentType &&
+          Boolean(item.isInline) === asset.inline,
       );
       if (existingIndex >= 0) {
         matchedExisting.add(existingIndex);
@@ -132,14 +142,12 @@ export class MailTransportService {
   async listAttachments(
     mailboxId: string,
     draftId: string,
-  ): Promise<
-    Array<{ name?: string; size?: number; contentId?: string | null }>
-  > {
+  ): Promise<GraphAttachmentSummary[]> {
     const result = await this.graph.request<{
-      value: Array<{ name?: string; size?: number; contentId?: string | null }>;
+      value: GraphAttachmentSummary[];
     }>(
       mailboxId,
-      `/me/messages/${encodeURIComponent(draftId)}/attachments?$select=name,size,contentId`,
+      `/me/messages/${encodeURIComponent(draftId)}/attachments?$select=name,size,contentType,isInline`,
       {},
       { maxRetries: 1, expected: [200] },
     );

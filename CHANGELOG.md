@@ -1,5 +1,11 @@
 # 更新日志
 
+## v0.06 - 2026-08-15
+
+- 修复 Microsoft Graph 附件列表在基础 `attachment` 类型上选择派生字段 `contentId`，导致所有 Microsoft 自动回复在发送前失败的问题。
+- 无固定附件的模板现在跳过不必要的附件恢复查询；有附件时仅选择 Graph 基础附件类型支持的 `name`、`size`、`contentType` 与 `isInline` 字段。
+- 增加无附件快速路径和附件恢复查询字段回归测试，防止同类 OData 查询兼容性问题再次出现。
+
 ## v0.05 - 2026-08-15
 
 - 修复 Nest 通配符中间件使用 `req.path` 被裁剪为 `/` 的问题；认证现在始终从 `originalUrl` 判断 API 路由。

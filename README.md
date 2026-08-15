@@ -1,6 +1,6 @@
 # MailPilot — Microsoft 与 Gmail 邮箱自动回复系统
 
-当前版本：**v0.05**
+当前版本：**v0.06**
 
 [![CI](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml)
 
@@ -8,12 +8,12 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 
 系统不使用 IMAP/SMTP，不保存邮箱密码。收件、发件和 OAuth 都通过 HTTPS 访问 Microsoft 或 Google 官方 API，因此服务器无需开放 993、465 或 587 端口。
 
-> v0.05 已完成代码级、类型、构建、自动化测试和本地 UI 冒烟测试。正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据、测试邮箱和 Debian 服务器完成本文末尾的真实环境验收。
+> v0.06 已完成代码级、类型、构建、自动化测试和本地 UI 冒烟测试，并修复 Microsoft Graph 回复附件查询兼容性问题。正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据、测试邮箱和 Debian 服务器完成本文末尾的真实环境验收。
 
 ## 目录
 
 - [主要功能](#主要功能)
-- [v0.05 支持范围](#v005-支持范围)
+- [v0.06 支持范围](#v006-支持范围)
 - [系统架构](#系统架构)
 - [网络与服务器要求](#网络与服务器要求)
 - [Debian 一键安装](#debian-一键安装)
@@ -61,7 +61,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - 支持 Argon2id + XChaCha20-Poly1305 加密备份与跨服务器恢复。
 - 提供 Debian 安装脚本、改密 CLI、健康检查和升级回滚脚本。
 
-## v0.05 支持范围
+## v0.06 支持范围
 
 支持：
 
@@ -1563,6 +1563,7 @@ v0.02
 v0.03
 v0.04
 v0.05
+v0.06
 ...
 ```
 

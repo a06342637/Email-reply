@@ -22,7 +22,7 @@ let smokeSettings = {
   dedupeDays: 365,
   sessionIdleMinutes: 120,
   sessionAbsoluteMinutes: 720,
-  version: "0.05",
+  version: "0.06",
 };
 
 const template = {
@@ -300,7 +300,7 @@ function api(path, method, body, res) {
     });
   if (path === "/api/v1/system/info")
     return json(res, {
-      version: "0.05",
+      version: "0.06",
       node: process.version,
       database: true,
       redis: true,

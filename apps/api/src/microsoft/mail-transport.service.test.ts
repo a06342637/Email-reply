@@ -81,7 +81,14 @@ describe("MailTransportService", () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
-        value: [{ name: "guide.pdf", size: 3, contentId: null }],
+        value: [
+          {
+            name: "guide.pdf",
+            size: 3,
+            contentType: "application/pdf",
+            isInline: false,
+          },
+        ],
       })
       .mockResolvedValue({ id: "attachment-2" });
     const service = new MailTransportService({ request } as never);
@@ -103,10 +110,23 @@ describe("MailTransportService", () => {
     ]);
 
     expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[0]?.[1]).toContain(
+      "$select=name,size,contentType,isInline",
+    );
+    expect(request.mock.calls[0]?.[1]).not.toContain("contentId");
     expect(request.mock.calls[1]?.[1]).toContain("/attachments");
     expect(request.mock.calls[1]?.[3]).toEqual({
       maxRetries: 0,
       expected: [201],
     });
+  });
+
+  it("does not query Graph when the template has no attachments", async () => {
+    const request = vi.fn();
+    const service = new MailTransportService({ request } as never);
+
+    await service.uploadAssets("mailbox-1", "draft-1", []);
+
+    expect(request).not.toHaveBeenCalled();
   });
 });
