@@ -31,6 +31,8 @@ describe("pagination controls", () => {
     );
 
     expect(html).toContain('aria-label="列表分页"');
+    expect(html).toContain('class="pagination-page-size"');
+    expect(html).toContain('aria-label="每页显示条数"');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain("第 3 / 10 页");
     expect(html).toContain("首页");
@@ -38,6 +40,7 @@ describe("pagination controls", () => {
     expect(html).toContain("跳转");
     for (const size of PAGE_SIZE_OPTIONS) {
       expect(html).toContain(`value="${size}"`);
+      expect(html).toContain(`${size} 条`);
     }
   });
 });

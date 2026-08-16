@@ -3,10 +3,10 @@ import { isFinishedUpdatePhase, shouldReloadAfterUpdate } from "./update-state";
 
 describe("online update page refresh state", () => {
   it("reloads only after the version started by this browser succeeds", () => {
-    expect(shouldReloadAfterUpdate("SUCCEEDED", "0.19", "0.19")).toBe(true);
-    expect(shouldReloadAfterUpdate("SUCCEEDED", "0.18", "0.19")).toBe(false);
-    expect(shouldReloadAfterUpdate("FAILED", "0.18", "0.19")).toBe(false);
-    expect(shouldReloadAfterUpdate("SUCCEEDED", "0.19", null)).toBe(false);
+    expect(shouldReloadAfterUpdate("SUCCEEDED", "0.20", "0.20")).toBe(true);
+    expect(shouldReloadAfterUpdate("SUCCEEDED", "0.19", "0.20")).toBe(false);
+    expect(shouldReloadAfterUpdate("FAILED", "0.19", "0.20")).toBe(false);
+    expect(shouldReloadAfterUpdate("SUCCEEDED", "0.20", null)).toBe(false);
   });
 
   it("clears pending browser state after every terminal result", () => {

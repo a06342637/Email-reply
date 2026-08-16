@@ -1314,13 +1314,18 @@ td small {
 }
 .pagination-summary {
   flex: 0 0 auto;
+  flex-wrap: nowrap;
+  min-width: max-content;
 }
 .pagination-summary label,
 .pagination-controls span {
   white-space: nowrap;
 }
-.pagination-summary label {
+.pagination-page-size {
+  flex: 0 0 auto;
   flex-direction: row;
+  flex-wrap: nowrap;
+  min-width: max-content;
 }
 .pagination-controls {
   flex: 1 1 620px;
@@ -1345,8 +1350,12 @@ td small {
   font-size: 13px;
 }
 .pagination select {
-  min-width: 72px;
+  box-sizing: border-box;
+  flex: 0 0 92px;
+  width: 92px;
+  min-width: 92px;
   height: 34px;
+  padding: 6px 30px 6px 12px;
 }
 .pagination input {
   width: 72px;
@@ -2139,7 +2148,10 @@ td small {
   .pagination-summary,
   .pagination-controls form {
     justify-content: space-between;
-    flex-wrap: wrap;
+  }
+  .pagination-summary {
+    width: 100%;
+    flex-wrap: nowrap;
   }
   .security-row {
     align-items: flex-start;

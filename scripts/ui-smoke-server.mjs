@@ -63,7 +63,7 @@ let smokeSettings = {
   dedupeDays: 365,
   sessionIdleMinutes: 120,
   sessionAbsoluteMinutes: 720,
-  version: "0.19",
+  version: "0.20",
 };
 
 const template = {
@@ -445,7 +445,7 @@ function api(url, method, body, res) {
   }
   if (path === "/api/v1/system/info")
     return json(res, {
-      version: "0.19",
+      version: "0.20",
       node: process.version,
       database: true,
       redis: true,
@@ -460,11 +460,11 @@ function api(url, method, body, res) {
       phase: smokeUpdateCompleted ? "SUCCEEDED" : "UP_TO_DATE",
       busy: false,
       progress: 100,
-      currentVersion: smokeUpdateCompleted ? "0.20" : "0.19",
-      latestVersion: smokeUpdateCompleted ? "0.20" : "0.19",
+      currentVersion: smokeUpdateCompleted ? "0.21" : "0.20",
+      latestVersion: smokeUpdateCompleted ? "0.21" : "0.20",
       updateAvailable: false,
       message: smokeUpdateCompleted
-        ? "已成功升级到 v0.20"
+        ? "已成功升级到 v0.21"
         : "当前已经是最新正式版本",
       checkedAt: now,
       startedAt: null,
@@ -477,19 +477,19 @@ function api(url, method, body, res) {
       rollbackImage: null,
       error: null,
       logs: smokeUpdateCompleted
-        ? ["自动备份已完成", "v0.20 健康检查通过"]
+        ? ["自动备份已完成", "v0.21 健康检查通过"]
         : ["当前已是最新版本"],
-      updaterVersion: "0.19",
+      updaterVersion: "0.20",
     });
   if (path === "/api/v1/update/check")
     return json(res, {
       phase: "AVAILABLE",
       busy: false,
       progress: 100,
-      currentVersion: "0.19",
-      latestVersion: "0.20",
+      currentVersion: "0.20",
+      latestVersion: "0.21",
       updateAvailable: true,
-      message: "发现正式版本 v0.20",
+      message: "发现正式版本 v0.21",
       checkedAt: now,
       startedAt: null,
       finishedAt: null,
@@ -500,14 +500,14 @@ function api(url, method, body, res) {
       backupFile: null,
       rollbackImage: null,
       error: null,
-      logs: ["开始检查更新", "发现 v0.20"],
-      updaterVersion: "0.19",
+      logs: ["开始检查更新", "发现 v0.21"],
+      updaterVersion: "0.20",
     });
   if (path === "/api/v1/update/apply") {
     const updateBody =
       body && typeof body === "object" ? body : Object.create(null);
     if (
-      updateBody.targetVersion !== "0.20" ||
+      updateBody.targetVersion !== "0.21" ||
       "backupPassphrase" in updateBody ||
       "confirmation" in updateBody
     )
@@ -524,7 +524,7 @@ function api(url, method, body, res) {
     smokeUpdateCompleted = true;
     return json(
       res,
-      { accepted: true, targetVersion: "0.20", phase: "QUEUED" },
+      { accepted: true, targetVersion: "0.21", phase: "QUEUED" },
       202,
     );
   }

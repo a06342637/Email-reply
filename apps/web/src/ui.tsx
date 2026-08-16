@@ -198,19 +198,19 @@ export function Pagination({
     <nav className="pagination" aria-label="列表分页">
       <div className="pagination-summary">
         <span>共 {total} 条</span>
-        <label>
-          每页
+        <label className="pagination-page-size">
+          <span>每页</span>
           <select
+            aria-label="每页显示条数"
             value={pageSize}
             onChange={(event) => onPageSizeChange(Number(event.target.value))}
           >
             {PAGE_SIZE_OPTIONS.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {value} 条
               </option>
             ))}
           </select>
-          条
         </label>
       </div>
       <div className="pagination-controls">
