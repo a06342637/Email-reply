@@ -8,6 +8,31 @@ const now = new Date().toISOString();
 let adminTheme = "dark";
 let mailboxRemoved = false;
 let taskDeleted = false;
+let templateDeleted = false;
+let smokeUpdateCompleted = false;
+let microsoftApps = [
+  {
+    id: "microsoft-app-1",
+    name: "主 Microsoft 应用",
+    clientId: "00000000-0000-4000-8000-000000000001",
+    hasClientSecret: true,
+    secretExpiresAt: null,
+    mailboxCount: 1,
+    createdAt: now,
+    updatedAt: now,
+  },
+];
+let googleApps = [
+  {
+    id: "google-app-1",
+    name: "客服 Gmail 应用",
+    clientId: "123456789-example.apps.googleusercontent.com",
+    hasClientSecret: true,
+    mailboxCount: 1,
+    createdAt: now,
+    updatedAt: now,
+  },
+];
 let smokeSettings = {
   siteName: "MailPilot 自动回复",
   timezone: "Asia/Shanghai",
@@ -23,7 +48,7 @@ let smokeSettings = {
   dedupeDays: 365,
   sessionIdleMinutes: 120,
   sessionAbsoluteMinutes: 720,
-  version: "0.13",
+  version: "0.16",
 };
 
 const template = {
@@ -72,6 +97,8 @@ const mailbox = {
   provider: "MICROSOFT",
   microsoftAuthMode: "MSAL_OAUTH",
   microsoftClientId: null,
+  microsoftAppConfigId: "microsoft-app-1",
+  microsoftAppConfig: { id: "microsoft-app-1", name: "主 Microsoft 应用" },
   displayName: "客户服务",
   tenantId: "tenant-1",
   accountType: "MICROSOFT_365",
@@ -122,6 +149,8 @@ const gmailMailbox = {
   id: "mailbox-google-1",
   email: "support.demo@gmail.com",
   provider: "GOOGLE",
+  googleAppConfigId: "google-app-1",
+  googleAppConfig: { id: "google-app-1", name: "客服 Gmail 应用" },
   displayName: "Gmail 支持邮箱",
   accountType: "GMAIL_PERSONAL",
   status: "CONNECTED",
@@ -262,9 +291,25 @@ function api(path, method, body, res) {
       { error: { code: "NOT_FOUND", message: `Invalid route: ${path}` } },
       404,
     );
-  if (path === "/api/v1/templates/template-1") return json(res, template);
+  if (path === "/api/v1/templates/template-1" && method === "DELETE") {
+    templateDeleted = true;
+    return json(res, { ok: true });
+  }
+  if (path === "/api/v1/templates/template-1")
+    return templateDeleted
+      ? json(
+          res,
+          { error: { code: "TEMPLATE_NOT_FOUND", message: "模板已删除" } },
+          404,
+        )
+      : json(res, template);
   if (path === "/api/v1/templates")
-    return json(res, [{ ...template, revisions: [template.revisions[0]] }]);
+    return json(
+      res,
+      templateDeleted
+        ? []
+        : [{ ...template, revisions: [template.revisions[0]] }],
+    );
   if (path === "/api/v1/templates/preview/render")
     return json(res, {
       subject: String(body?.subjectTemplate || "Re: 测试主题").replace(
@@ -285,8 +330,7 @@ function api(path, method, body, res) {
   if (path === "/api/v1/microsoft/config")
     return json(res, {
       configured: true,
-      clientId: "00000000-0000-4000-8000-000000000001",
-      hasClientSecret: true,
+      apps: microsoftApps,
       publicUrl: "https://mail.example.com",
       callbackUrl: "https://mail.example.com/api/v1/microsoft/oauth/callback",
       scopes: [
@@ -301,8 +345,7 @@ function api(path, method, body, res) {
   if (path === "/api/v1/google/config")
     return json(res, {
       configured: true,
-      clientId: "123456789-example.apps.googleusercontent.com",
-      hasClientSecret: true,
+      apps: googleApps,
       publicUrl: "https://mail.example.com",
       callbackUrl: "https://mail.example.com/api/v1/google/oauth/callback",
       scopes: [
@@ -313,9 +356,70 @@ function api(path, method, body, res) {
         "https://www.googleapis.com/auth/gmail.compose",
       ],
     });
+  const microsoftAppMatch = path.match(/^\/api\/v1\/microsoft\/apps\/(.+)$/);
+  const googleAppMatch = path.match(/^\/api\/v1\/google\/apps\/(.+)$/);
+  if (path === "/api/v1/microsoft/apps" && method === "POST") {
+    const row = {
+      id: `microsoft-app-${Date.now()}`,
+      name: String(body?.name || "Microsoft 应用"),
+      clientId: String(body?.clientId || ""),
+      hasClientSecret: true,
+      secretExpiresAt: body?.secretExpiresAt || null,
+      mailboxCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    microsoftApps = [...microsoftApps, row];
+    return json(res, row);
+  }
+  if (path === "/api/v1/google/apps" && method === "POST") {
+    const row = {
+      id: `google-app-${Date.now()}`,
+      name: String(body?.name || "Google 应用"),
+      clientId: String(body?.clientId || ""),
+      hasClientSecret: true,
+      mailboxCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    googleApps = [...googleApps, row];
+    return json(res, row);
+  }
+  if (microsoftAppMatch && method === "PATCH") {
+    microsoftApps = microsoftApps.map((app) =>
+      app.id === microsoftAppMatch[1]
+        ? { ...app, ...body, hasClientSecret: true, updatedAt: now }
+        : app,
+    );
+    return json(
+      res,
+      microsoftApps.find((app) => app.id === microsoftAppMatch[1]),
+    );
+  }
+  if (googleAppMatch && method === "PATCH") {
+    googleApps = googleApps.map((app) =>
+      app.id === googleAppMatch[1]
+        ? { ...app, ...body, hasClientSecret: true, updatedAt: now }
+        : app,
+    );
+    return json(
+      res,
+      googleApps.find((app) => app.id === googleAppMatch[1]),
+    );
+  }
+  if (microsoftAppMatch && method === "DELETE") {
+    microsoftApps = microsoftApps.filter(
+      (app) => app.id !== microsoftAppMatch[1],
+    );
+    return json(res, { ok: true });
+  }
+  if (googleAppMatch && method === "DELETE") {
+    googleApps = googleApps.filter((app) => app.id !== googleAppMatch[1]);
+    return json(res, { ok: true });
+  }
   if (path === "/api/v1/system/info")
     return json(res, {
-      version: "0.13",
+      version: "0.16",
       node: process.version,
       database: true,
       redis: true,
@@ -327,13 +431,15 @@ function api(path, method, body, res) {
     });
   if (path === "/api/v1/update/status")
     return json(res, {
-      phase: "UP_TO_DATE",
+      phase: smokeUpdateCompleted ? "SUCCEEDED" : "UP_TO_DATE",
       busy: false,
       progress: 100,
-      currentVersion: "0.13",
-      latestVersion: "0.13",
+      currentVersion: smokeUpdateCompleted ? "0.17" : "0.16",
+      latestVersion: smokeUpdateCompleted ? "0.17" : "0.16",
       updateAvailable: false,
-      message: "当前已经是最新正式版本",
+      message: smokeUpdateCompleted
+        ? "已成功升级到 v0.17"
+        : "当前已经是最新正式版本",
       checkedAt: now,
       startedAt: null,
       finishedAt: null,
@@ -341,40 +447,61 @@ function api(path, method, body, res) {
       targetCommit: "0123456789abcdef",
       releaseNotes: [],
       blockedReason: null,
-      backupFile: null,
+      backupFile: smokeUpdateCompleted ? "pre-update-ui-smoke.mpbak" : null,
       rollbackImage: null,
       error: null,
-      logs: ["当前已是最新版本"],
-      updaterVersion: "0.13",
+      logs: smokeUpdateCompleted
+        ? ["自动备份已完成", "v0.17 健康检查通过"]
+        : ["当前已是最新版本"],
+      updaterVersion: "0.16",
     });
   if (path === "/api/v1/update/check")
     return json(res, {
       phase: "AVAILABLE",
       busy: false,
       progress: 100,
-      currentVersion: "0.13",
-      latestVersion: "0.08",
+      currentVersion: "0.16",
+      latestVersion: "0.17",
       updateAvailable: true,
-      message: "发现正式版本 v0.08",
+      message: "发现正式版本 v0.17",
       checkedAt: now,
       startedAt: null,
       finishedAt: null,
       currentCommit: "0123456789abcdef",
       targetCommit: "fedcba9876543210",
-      releaseNotes: ["演示在线升级确认流程", "验证升级前加密备份"],
+      releaseNotes: ["验证一键升级和自动刷新", "验证升级前加密备份"],
       blockedReason: null,
       backupFile: null,
       rollbackImage: null,
       error: null,
-      logs: ["开始检查更新", "发现 v0.08"],
-      updaterVersion: "0.13",
+      logs: ["开始检查更新", "发现 v0.17"],
+      updaterVersion: "0.16",
     });
-  if (path === "/api/v1/update/apply")
+  if (path === "/api/v1/update/apply") {
+    const updateBody =
+      body && typeof body === "object" ? body : Object.create(null);
+    if (
+      updateBody.targetVersion !== "0.17" ||
+      "backupPassphrase" in updateBody ||
+      "confirmation" in updateBody
+    )
+      return json(
+        res,
+        {
+          error: {
+            code: "INVALID_UPDATE_REQUEST",
+            message: "升级请求格式错误",
+          },
+        },
+        400,
+      );
+    smokeUpdateCompleted = true;
     return json(
       res,
-      { accepted: true, targetVersion: "0.08", phase: "QUEUED" },
+      { accepted: true, targetVersion: "0.17", phase: "QUEUED" },
       202,
     );
+  }
   if (path === "/api/v1/webhooks") return json(res, []);
   if (path === "/api/v1/alerts") return json(res, []);
   if (path === "/api/v1/processing-logs") return json(res, page([]));

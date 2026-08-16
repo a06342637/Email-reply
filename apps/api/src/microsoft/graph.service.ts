@@ -51,6 +51,7 @@ type MicrosoftMailboxTokenRecord = {
   status: "CONNECTED" | "AUTH_REQUIRED" | "DISABLED" | "REMOVED";
   microsoftAuthMode: "MSAL_OAUTH" | "CLIENT_ID_REFRESH_TOKEN";
   microsoftClientId: string | null;
+  microsoftAppConfigId: string | null;
   homeAccountId: string;
   tokenCacheEncrypted: string;
 };
@@ -62,6 +63,7 @@ type MicrosoftCredentialSnapshot = Pick<
   | "status"
   | "microsoftAuthMode"
   | "microsoftClientId"
+  | "microsoftAppConfigId"
   | "homeAccountId"
   | "tokenCacheEncrypted"
 >;
@@ -167,12 +169,12 @@ export class GraphService {
   ): Promise<MicrosoftAccessTokenContext> {
     try {
       const app = await this.prisma.microsoftAppConfig.findUnique({
-        where: { id: "singleton" },
+        where: { id: mailbox.microsoftAppConfigId || "singleton" },
       });
       if (!app)
         throw new AppError(
-          "MICROSOFT_NOT_CONFIGURED",
-          "请先配置 Microsoft Client ID 和 Client Secret",
+          "MICROSOFT_APP_NOT_FOUND",
+          "邮箱绑定的 Microsoft 应用不存在，请重新授权",
           409,
         );
       const cca = await this.createClient(
@@ -302,6 +304,7 @@ export class GraphService {
         id: mailbox.id,
         provider: "MICROSOFT",
         microsoftAuthMode: mailbox.microsoftAuthMode,
+        microsoftAppConfigId: mailbox.microsoftAppConfigId,
         status: "CONNECTED",
         tokenCacheEncrypted: mailbox.tokenCacheEncrypted,
       },
@@ -768,6 +771,7 @@ export class GraphService {
           status: "CONNECTED",
           microsoftAuthMode: credential.microsoftAuthMode,
           microsoftClientId: credential.microsoftClientId,
+          microsoftAppConfigId: credential.microsoftAppConfigId,
           homeAccountId: credential.homeAccountId,
           tokenCacheEncrypted: credential.tokenCacheEncrypted,
         },
@@ -827,6 +831,7 @@ export class GraphService {
       status: mailbox.status,
       microsoftAuthMode: mailbox.microsoftAuthMode,
       microsoftClientId: mailbox.microsoftClientId,
+      microsoftAppConfigId: mailbox.microsoftAppConfigId,
       homeAccountId: mailbox.homeAccountId,
       tokenCacheEncrypted,
     };

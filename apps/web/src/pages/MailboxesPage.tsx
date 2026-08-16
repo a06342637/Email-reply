@@ -12,7 +12,8 @@ import {
 } from "lucide-react";
 import { api, json } from "../api";
 import { useApp } from "../app-context";
-import type { Mailbox } from "../types";
+import type { Mailbox, ProviderConfig } from "../types";
+import { microsoftDialogDefaults } from "./mailbox-app-selection";
 import {
   Card,
   Empty,
@@ -23,18 +24,31 @@ import {
   Status,
   fmtDate,
 } from "../ui";
+
 export function MailboxesPage() {
   const { notify } = useApp();
   const [data, setData] = useState<Mailbox[]>();
+  const [microsoftConfig, setMicrosoftConfig] = useState<ProviderConfig>();
+  const [googleConfig, setGoogleConfig] = useState<ProviderConfig>();
   const [microsoftDialog, setMicrosoftDialog] = useState(false);
   const [googleDialog, setGoogleDialog] = useState(false);
+  const [microsoftOAuthAppId, setMicrosoftOAuthAppId] = useState("");
+  const [googleOAuthAppId, setGoogleOAuthAppId] = useState("");
   const [refreshImport, setRefreshImport] = useState({
+    appConfigId: "",
     clientId: "",
     refreshToken: "",
   });
   const [importing, setImporting] = useState(false);
   const load = useCallback(async () => {
-    setData(await api("/api/v1/mailboxes"));
+    const [mailboxes, microsoft, google] = await Promise.all([
+      api<Mailbox[]>("/api/v1/mailboxes"),
+      api<ProviderConfig>("/api/v1/microsoft/config"),
+      api<ProviderConfig>("/api/v1/google/config"),
+    ]);
+    setData(mailboxes);
+    setMicrosoftConfig(microsoft);
+    setGoogleConfig(google);
   }, []);
   useEffect(() => {
     void load();
@@ -47,11 +61,18 @@ export function MailboxesPage() {
       notify(params.get("reason") || `${providerName} 授权失败`, "danger");
     if (oauth) history.replaceState({}, "", location.pathname);
   }, [load, notify]);
-  async function connectOAuth(provider: "microsoft" | "google") {
+  async function connectOAuth(
+    provider: "microsoft" | "google",
+    appConfigId: string,
+  ) {
+    if (!appConfigId) {
+      notify("请先选择要使用的应用配置", "danger");
+      return;
+    }
     try {
       const r = await api<{ authorizationUrl: string }>(
         `/api/v1/${provider}/oauth/start`,
-        json("POST", { redirectAfter: "/mailboxes" }),
+        json("POST", { appConfigId, redirectAfter: "/mailboxes" }),
       );
       location.href = r.authorizationUrl;
     } catch (e) {
@@ -59,21 +80,28 @@ export function MailboxesPage() {
     }
   }
   function openMicrosoft(mailbox?: Mailbox) {
-    setRefreshImport({
-      clientId: mailbox?.microsoftClientId || "",
-      refreshToken: "",
-    });
+    const defaults = microsoftDialogDefaults(
+      mailbox,
+      microsoftConfig?.apps || [],
+    );
+    setMicrosoftOAuthAppId(defaults.oauthAppId);
+    setRefreshImport(defaults.refreshImport);
     setMicrosoftDialog(true);
   }
   function closeMicrosoft() {
     if (importing) return;
     setMicrosoftDialog(false);
-    setRefreshImport({ clientId: "", refreshToken: "" });
+    setMicrosoftOAuthAppId("");
+    setRefreshImport({ appConfigId: "", clientId: "", refreshToken: "" });
   }
-  function openGoogle() {
+  function openGoogle(mailbox?: Mailbox) {
+    setGoogleOAuthAppId(
+      mailbox?.googleAppConfigId || googleConfig?.apps[0]?.id || "",
+    );
     setGoogleDialog(true);
   }
   function closeGoogle() {
+    setGoogleOAuthAppId("");
     setGoogleDialog(false);
   }
   async function importMicrosoftRefreshToken(event: React.FormEvent) {
@@ -82,10 +110,16 @@ export function MailboxesPage() {
     try {
       const result = await api<{ email: string }>(
         "/api/v1/microsoft/import-refresh-token",
-        json("POST", refreshImport),
+        json("POST", {
+          appConfigId: refreshImport.appConfigId || undefined,
+          clientId: refreshImport.appConfigId
+            ? undefined
+            : refreshImport.clientId,
+          refreshToken: refreshImport.refreshToken,
+        }),
       );
       setMicrosoftDialog(false);
-      setRefreshImport({ clientId: "", refreshToken: "" });
+      setRefreshImport({ appConfigId: "", clientId: "", refreshToken: "" });
       notify(`${result.email} 已通过 Refresh Token 安全导入`);
       await load();
     } catch (error) {
@@ -113,7 +147,7 @@ export function MailboxesPage() {
     notify("操作已完成");
     await load();
   }
-  if (!data) return <Loading />;
+  if (!data || !microsoftConfig || !googleConfig) return <Loading />;
   return (
     <>
       <PageHeader
@@ -125,7 +159,7 @@ export function MailboxesPage() {
               <MailPlus size={18} />
               添加 Microsoft
             </button>
-            <button onClick={openGoogle}>
+            <button onClick={() => openGoogle()}>
               <MailPlus size={18} />
               连接 Gmail
             </button>
@@ -204,12 +238,25 @@ export function MailboxesPage() {
                     </dd>
                   </div>
                 )}
-                {m.provider === "MICROSOFT" && m.microsoftClientId && (
-                  <div>
-                    <dt>独立 Client ID</dt>
-                    <dd className="break-value">{m.microsoftClientId}</dd>
-                  </div>
-                )}
+                <div>
+                  <dt>应用配置</dt>
+                  <dd>
+                    {m.provider === "GOOGLE"
+                      ? m.googleAppConfig?.name || "未绑定（需重新授权）"
+                      : m.microsoftAppConfig?.name ||
+                        (m.microsoftAuthMode === "CLIENT_ID_REFRESH_TOKEN"
+                          ? "独立 Client ID"
+                          : "未绑定（需重新授权）")}
+                  </dd>
+                </div>
+                {m.provider === "MICROSOFT" &&
+                  m.microsoftClientId &&
+                  !m.microsoftAppConfig && (
+                    <div>
+                      <dt>独立 Client ID</dt>
+                      <dd className="break-value">{m.microsoftClientId}</dd>
+                    </div>
+                  )}
                 <div>
                   <dt>最后刷新</dt>
                   <dd>{fmtDate(m.lastTokenRefreshAt)}</dd>
@@ -246,7 +293,7 @@ export function MailboxesPage() {
                 {m.status === "AUTH_REQUIRED" && (
                   <button
                     onClick={() =>
-                      m.provider === "GOOGLE" ? openGoogle() : openMicrosoft(m)
+                      m.provider === "GOOGLE" ? openGoogle(m) : openMicrosoft(m)
                     }
                   >
                     <RefreshCw />
@@ -291,7 +338,7 @@ export function MailboxesPage() {
               <button className="primary" onClick={() => openMicrosoft()}>
                 添加 Microsoft
               </button>
-              <button onClick={openGoogle}>连接 Gmail</button>
+              <button onClick={() => openGoogle()}>连接 Gmail</button>
             </div>
           </Empty>
         </Card>
@@ -337,12 +384,28 @@ export function MailboxesPage() {
                   需要先在系统设置中保存对应 Client ID 和 Client Secret Value
                 </li>
               </ul>
+              <label>
+                使用 Microsoft Graph 应用
+                <select
+                  value={microsoftOAuthAppId}
+                  onChange={(event) =>
+                    setMicrosoftOAuthAppId(event.target.value)
+                  }
+                >
+                  <option value="">请选择应用</option>
+                  {microsoftConfig.apps.map((app) => (
+                    <option key={app.id} value={app.id}>
+                      {app.name} · {app.clientId}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 className="primary auth-method-submit"
-                disabled={importing}
+                disabled={importing || !microsoftOAuthAppId}
                 onClick={() => {
                   closeMicrosoft();
-                  void connectOAuth("microsoft");
+                  void connectOAuth("microsoft", microsoftOAuthAppId);
                 }}
               >
                 <LogIn />
@@ -377,9 +440,34 @@ export function MailboxesPage() {
                 <li>签发应用必须允许不提交 Client Secret 的公共客户端刷新</li>
               </ul>
               <label>
+                Microsoft 应用
+                <select
+                  value={refreshImport.appConfigId}
+                  onChange={(event) => {
+                    const appConfigId = event.target.value;
+                    const app = microsoftConfig.apps.find(
+                      (item) => item.id === appConfigId,
+                    );
+                    setRefreshImport({
+                      ...refreshImport,
+                      appConfigId,
+                      clientId: app?.clientId || "",
+                    });
+                  }}
+                >
+                  <option value="">手工填写独立 Client ID</option>
+                  {microsoftConfig.apps.map((app) => (
+                    <option key={app.id} value={app.id}>
+                      {app.name} · {app.clientId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Client ID
                 <input
                   required
+                  disabled={Boolean(refreshImport.appConfigId)}
                   value={refreshImport.clientId}
                   onChange={(event) =>
                     setRefreshImport({
@@ -490,17 +578,31 @@ export function MailboxesPage() {
             </section>
           </div>
           <Notice>
-            请先在“系统设置 → Google / Gmail”保存 Client ID、Client Secret 和
-            HTTPS 公开地址。Gmail 当前不支持邮箱密码或直接粘贴 Refresh Token
-            导入。
+            请先在“系统设置 → Google / Gmail”添加至少一套应用，并保存 HTTPS
+            公开地址。Gmail 当前不支持邮箱密码或直接粘贴 Refresh Token 导入。
           </Notice>
+          <label>
+            使用 Google / Gmail 应用
+            <select
+              value={googleOAuthAppId}
+              onChange={(event) => setGoogleOAuthAppId(event.target.value)}
+            >
+              <option value="">请选择应用</option>
+              {googleConfig.apps.map((app) => (
+                <option key={app.id} value={app.id}>
+                  {app.name} · {app.clientId}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="modal-actions">
             <button onClick={closeGoogle}>取消</button>
             <button
               className="primary"
+              disabled={!googleOAuthAppId}
               onClick={() => {
                 closeGoogle();
-                void connectOAuth("google");
+                void connectOAuth("google", googleOAuthAppId);
               }}
             >
               <LogIn />

@@ -275,12 +275,20 @@ export class MailProcessorService {
           data: {
             draftMessageId: message.id,
             draftInternetId: message.internetMessageId,
-            state: message.isDraft ? "DRAFT_READY" : "SENT",
+            state: message.isDraft
+              ? "DRAFT_READY"
+              : message.sentDateTime
+                ? "SENT"
+                : "SENDING",
           },
         });
       }
 
-      if (message && message.isDraft === false) {
+      if (
+        message &&
+        message.isDraft === false &&
+        Boolean(message.sentDateTime)
+      ) {
         await this.markSent(receiptId, attemptId, message.internetMessageId);
         return;
       }
@@ -561,6 +569,10 @@ export class MailProcessorService {
           ruleName: receipt.rule?.name,
           templateName: receipt.templateRevision?.template.name,
           status: "SENT",
+          reason:
+            receipt.mailbox.provider === "GOOGLE"
+              ? "Gmail API 已确认邮件进入已发送；这不是目标邮箱的最终送达回执"
+              : "Microsoft Graph 已确认邮件进入已发送邮件；这不是目标邮箱的最终送达回执",
         },
       });
       return true;

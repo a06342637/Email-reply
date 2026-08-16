@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Liquid } from "liquidjs";
 import { TemplateService } from "./template.service.js";
 
@@ -87,5 +87,84 @@ describe("Liquid template restrictions", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "TEMPLATE_SYNTAX_INVALID" });
+  });
+});
+
+describe("TemplateService deletion", () => {
+  it("shows templates created by the old archive action so they can be deleted", async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const service = new TemplateService({
+      replyTemplate: { findMany },
+    } as never);
+
+    await service.list();
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({ where: { archivedAt: null } }),
+    );
+  });
+
+  it("permanently deletes an unused template and all of its revisions", async () => {
+    const prisma = {
+      replyTemplate: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "template-1",
+          revisions: [{ id: "revision-1" }, { id: "revision-2" }],
+          _count: { defaultForTasks: 0, rules: 0 },
+        }),
+        delete: vi.fn().mockResolvedValue({}),
+      },
+      messageReceipt: { count: vi.fn().mockResolvedValue(0) },
+    };
+    const service = new TemplateService(prisma as never);
+
+    await expect(service.delete("template-1")).resolves.toEqual({
+      revisionCount: 2,
+    });
+    expect(prisma.replyTemplate.delete).toHaveBeenCalledWith({
+      where: { id: "template-1" },
+    });
+  });
+
+  it("refuses to delete a template still assigned to tasks or rules", async () => {
+    const prisma = {
+      replyTemplate: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "template-1",
+          revisions: [{ id: "revision-1" }],
+          _count: { defaultForTasks: 1, rules: 2 },
+        }),
+        delete: vi.fn(),
+      },
+      messageReceipt: { count: vi.fn() },
+    };
+    const service = new TemplateService(prisma as never);
+
+    await expect(service.delete("template-1")).rejects.toMatchObject({
+      code: "TEMPLATE_IN_USE",
+      status: 409,
+    });
+    expect(prisma.replyTemplate.delete).not.toHaveBeenCalled();
+  });
+
+  it("refuses to delete a template while a reply is still in progress", async () => {
+    const prisma = {
+      replyTemplate: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "template-1",
+          revisions: [{ id: "revision-1" }],
+          _count: { defaultForTasks: 0, rules: 0 },
+        }),
+        delete: vi.fn(),
+      },
+      messageReceipt: { count: vi.fn().mockResolvedValue(1) },
+    };
+    const service = new TemplateService(prisma as never);
+
+    await expect(service.delete("template-1")).rejects.toMatchObject({
+      code: "TEMPLATE_PROCESSING",
+      status: 409,
+    });
+    expect(prisma.replyTemplate.delete).not.toHaveBeenCalled();
   });
 });

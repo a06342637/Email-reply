@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareReleaseVersions,
   composeVersionEnvironment,
+  deriveUpdateBackupPassphrase,
   latestReleaseTag,
   normalizeRepositoryUrl,
   parseReleaseVersion,
@@ -39,6 +40,16 @@ describe("updater safety helpers", () => {
     expect(
       normalizeRepositoryUrl("https://github.com/a06342637/Email-reply.git/"),
     ).toBe("https://github.com/a06342637/email-reply");
+  });
+
+  it("derives a stable dedicated passphrase for automatic update backups", () => {
+    const token = "a".repeat(32);
+    const passphrase = deriveUpdateBackupPassphrase(token);
+    expect(passphrase).toHaveLength(43);
+    expect(passphrase).toBe(deriveUpdateBackupPassphrase(token));
+    expect(passphrase).not.toContain(token);
+    expect(deriveUpdateBackupPassphrase("b".repeat(32))).not.toBe(passphrase);
+    expect(() => deriveUpdateBackupPassphrase("too-short")).toThrow();
   });
 
   it("updates one dotenv key without duplicating it", () => {

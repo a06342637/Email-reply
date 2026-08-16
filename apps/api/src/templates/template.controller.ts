@@ -155,12 +155,14 @@ export class TemplateController {
   }
 
   @Delete(":id")
-  async archive(@Param("id") id: string, @Req() req: Request) {
-    await this.templates.archive(id);
-    await this.audit.write("TEMPLATE_ARCHIVED", req, {
-      type: "ReplyTemplate",
-      id,
-    });
+  async remove(@Param("id") id: string, @Req() req: Request) {
+    const result = await this.templates.delete(id);
+    await this.audit.write(
+      "TEMPLATE_DELETED",
+      req,
+      { type: "ReplyTemplate", id },
+      result,
+    );
     return { ok: true };
   }
 }

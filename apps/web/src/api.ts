@@ -11,6 +11,11 @@ const initialCsrf = document.cookie.match(
   /(?:^|; )autoreply_csrf=([^;]+)/,
 )?.[1];
 let csrfToken = initialCsrf ? decodeURIComponent(initialCsrf) : "";
+export const AUTH_REQUIRED_EVENT = "autoreply:auth-required";
+
+function isLoginRequest(path: string): boolean {
+  return path.split(/[?#]/, 1)[0]?.endsWith("/auth/login") ?? false;
+}
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
@@ -32,6 +37,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok) {
+    if (response.status === 401 && !isLoginRequest(path)) {
+      csrfToken = "";
+      window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
+    }
     const body = contentType.includes("json")
       ? (((await response.json().catch(() => null)) as ApiError | null) ?? null)
       : null;

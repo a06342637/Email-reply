@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import {
   ArchiveRestore,
-  CloudCog,
   Download,
   HardDrive,
   Lock,
+  Pencil,
+  Plus,
   Save,
   ShieldCheck,
+  Trash2,
   Upload,
   Webhook,
 } from "lucide-react";
@@ -14,6 +16,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { api, currentCsrf, json } from "../api";
 import { useApp } from "../app-context";
 import { UpdatePanel } from "../UpdatePanel";
+import type { ProviderAppConfig, ProviderConfig } from "../types";
 import {
   Card,
   Loading,
@@ -23,6 +26,16 @@ import {
   fmtBytes,
   fmtDate,
 } from "../ui";
+
+type AppEditor = {
+  provider: "microsoft" | "google";
+  id?: string;
+  name: string;
+  clientId: string;
+  clientSecret: string;
+  secretExpiresAt?: string;
+};
+
 export function SettingsPage() {
   const { admin, applyUiSettings, refreshMe, notify } = useApp();
   const [data, setData] = useState<any>();
@@ -34,6 +47,7 @@ export function SettingsPage() {
   const [disableTotp, setDisableTotp] = useState(false);
   const [totpPassword, setTotpPassword] = useState("");
   const [webhooks, setWebhooks] = useState<any[]>([]);
+  const [appEditor, setAppEditor] = useState<AppEditor>();
   async function load() {
     const [s, m, g, i, w] = await Promise.all([
       api("/api/v1/settings"),
@@ -76,36 +90,61 @@ export function SettingsPage() {
     applyUiSettings(saved);
     notify("系统设置已保存");
   }
-  async function saveMs() {
+  async function saveProviderPublicUrl(provider: "microsoft" | "google") {
+    const config = provider === "microsoft" ? ms : google;
     await api(
-      "/api/v1/microsoft/config",
-      json("PATCH", {
-        clientId: ms.clientId,
-        clientSecret: ms.clientSecret || undefined,
-        secretExpiresAt: ms.secretExpiresAt || null,
-      }),
+      `/api/v1/${provider}/public-url`,
+      json("PATCH", { publicUrl: config.publicUrl || "" }),
     );
-    await api(
-      "/api/v1/microsoft/public-url",
-      json("PATCH", { publicUrl: ms.publicUrl || "" }),
-    );
-    notify("Microsoft 配置已保存");
+    notify("HTTPS 公开地址已保存");
     await load();
   }
-  async function saveGoogle() {
+  function editApp(provider: "microsoft" | "google", app?: ProviderAppConfig) {
+    setAppEditor({
+      provider,
+      id: app?.id,
+      name:
+        app?.name ||
+        (provider === "microsoft"
+          ? `Microsoft 应用 ${(ms.apps?.length ?? 0) + 1}`
+          : `Google / Gmail 应用 ${(google.apps?.length ?? 0) + 1}`),
+      clientId: app?.clientId || "",
+      clientSecret: "",
+      secretExpiresAt: dateInput(app?.secretExpiresAt || undefined),
+    });
+  }
+  async function saveApp() {
+    if (!appEditor) return;
+    const payload: Record<string, unknown> = {
+      name: appEditor.name,
+      clientId: appEditor.clientId,
+      clientSecret: appEditor.clientSecret || undefined,
+    };
+    if (appEditor.provider === "microsoft")
+      payload.secretExpiresAt = appEditor.secretExpiresAt || null;
     await api(
-      "/api/v1/google/config",
-      json("PATCH", {
-        clientId: google.clientId,
-        clientSecret: google.clientSecret || undefined,
-      }),
+      appEditor.id
+        ? `/api/v1/${appEditor.provider}/apps/${appEditor.id}`
+        : `/api/v1/${appEditor.provider}/apps`,
+      json(appEditor.id ? "PATCH" : "POST", payload),
     );
-    await api(
-      "/api/v1/google/public-url",
-      json("PATCH", { publicUrl: google.publicUrl || "" }),
-    );
-    notify("Google / Gmail 配置已保存");
+    notify(appEditor.id ? "应用配置已更新" : "应用配置已添加");
+    setAppEditor(undefined);
     await load();
+  }
+  async function deleteApp(
+    provider: "microsoft" | "google",
+    app: ProviderAppConfig,
+  ) {
+    if (!confirm(`确定删除应用“${app.name}”吗？仍被邮箱使用时系统会拒绝删除。`))
+      return;
+    try {
+      await api(`/api/v1/${provider}/apps/${app.id}`, json("DELETE"));
+      notify("应用配置已删除");
+      await load();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "删除应用失败", "danger");
+    }
   }
   async function turnOffTotp() {
     await api(
@@ -337,40 +376,24 @@ export function SettingsPage() {
               不要选择“应用程序权限（Application
               permissions）”。本系统只使用登录用户的委托权限；给错权限会导致登录后仍无法读信或发信。
             </Notice>
-            <div className="form-grid">
-              <label>
-                Client ID
-                <input
-                  value={ms.clientId}
-                  onChange={(e) => setMs({ ...ms, clientId: e.target.value })}
-                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                />
-              </label>
-              <label>
-                Client Secret
-                <input
-                  type="password"
-                  value={ms.clientSecret || ""}
-                  onChange={(e) =>
-                    setMs({ ...ms, clientSecret: e.target.value })
-                  }
-                  placeholder={
-                    ms.hasClientSecret
-                      ? "已保存；留空不替换"
-                      : "请输入 Secret Value"
-                  }
-                />
-              </label>
-              <label>
-                Secret 到期日
-                <input
-                  type="date"
-                  value={dateInput(ms.secretExpiresAt)}
-                  onChange={(e) =>
-                    setMs({ ...ms, secretExpiresAt: e.target.value })
-                  }
-                />
-              </label>
+            <div className="provider-app-heading">
+              <div>
+                <h3>已保存的 Microsoft 应用</h3>
+                <p>
+                  每个邮箱在连接时选择一套应用，修改只影响绑定该应用的邮箱。
+                </p>
+              </div>
+              <button className="primary" onClick={() => editApp("microsoft")}>
+                <Plus /> 添加应用
+              </button>
+            </div>
+            <ProviderAppList
+              provider="microsoft"
+              config={ms}
+              onEdit={(app) => editApp("microsoft", app)}
+              onDelete={(app) => deleteApp("microsoft", app)}
+            />
+            <div className="form-grid provider-public-url">
               <label>
                 HTTPS 公开地址
                 <input
@@ -379,6 +402,12 @@ export function SettingsPage() {
                   placeholder="https://mail.example.com"
                 />
               </label>
+              <button
+                className="primary"
+                onClick={() => saveProviderPublicUrl("microsoft")}
+              >
+                <Save /> 保存公开地址
+              </button>
             </div>
             <div className="callback">
               <span>OAuth 回调地址</span>
@@ -396,15 +425,12 @@ export function SettingsPage() {
               读取收件箱/垃圾箱并管理回复草稿；Mail.Send 发送普通 Reply。
             </p>
             <Notice>
-              “Client ID + Refresh Token”高级导入不使用这里的 Secret。该 Token
-              必须属于同一个 Client ID，来自委托授权，并至少包含
+              “Client ID + Refresh
+              Token”高级导入可直接选择上方已保存应用，也可手工填写独立 Client
+              ID。该 Token 必须属于同一个 Client ID，来自委托授权，并至少包含
               offline_access、User.Read、Mail.ReadWrite、Mail.Send；签发应用还必须允许不提交
               Client Secret 的公共客户端刷新。
             </Notice>
-            <button className="primary" onClick={saveMs}>
-              <CloudCog />
-              保存 Microsoft 配置
-            </button>
           </div>
         </Card>
       )}
@@ -453,32 +479,25 @@ export function SettingsPage() {
                 </p>
               </section>
             </div>
-            <div className="form-grid">
-              <label>
-                Client ID
-                <input
-                  value={google.clientId}
-                  onChange={(e) =>
-                    setGoogle({ ...google, clientId: e.target.value })
-                  }
-                  placeholder="xxxxxxxx.apps.googleusercontent.com"
-                />
-              </label>
-              <label>
-                Client Secret
-                <input
-                  type="password"
-                  value={google.clientSecret || ""}
-                  onChange={(e) =>
-                    setGoogle({ ...google, clientSecret: e.target.value })
-                  }
-                  placeholder={
-                    google.hasClientSecret
-                      ? "已保存；留空不替换"
-                      : "请输入 Client Secret"
-                  }
-                />
-              </label>
+            <div className="provider-app-heading">
+              <div>
+                <h3>已保存的 Google / Gmail 应用</h3>
+                <p>
+                  可以为不同 Gmail 或 Workspace 邮箱分别使用不同的 Google Cloud
+                  项目。
+                </p>
+              </div>
+              <button className="primary" onClick={() => editApp("google")}>
+                <Plus /> 添加应用
+              </button>
+            </div>
+            <ProviderAppList
+              provider="google"
+              config={google}
+              onEdit={(app) => editApp("google", app)}
+              onDelete={(app) => deleteApp("google", app)}
+            />
+            <div className="form-grid provider-public-url">
               <label>
                 HTTPS 公开地址
                 <input
@@ -489,6 +508,12 @@ export function SettingsPage() {
                   placeholder="https://mail.example.com"
                 />
               </label>
+              <button
+                className="primary"
+                onClick={() => saveProviderPublicUrl("google")}
+              >
+                <Save /> 保存公开地址
+              </button>
             </div>
             <div className="callback">
               <span>OAuth 回调地址</span>
@@ -506,10 +531,6 @@ export function SettingsPage() {
               应用验证和安全评估；自用或测试阶段请把邮箱加入“测试用户”。Gmail
               当前只支持 OAuth 网页登录，不支持直接粘贴邮箱密码。
             </Notice>
-            <button className="primary" onClick={saveGoogle}>
-              <CloudCog />
-              保存 Google 配置
-            </button>
           </div>
         </Card>
       )}
@@ -628,6 +649,88 @@ export function SettingsPage() {
           </div>
         </Card>
       )}
+      {appEditor && (
+        <Modal
+          title={`${appEditor.id ? "编辑" : "添加"} ${
+            appEditor.provider === "microsoft"
+              ? "Microsoft Graph"
+              : "Google / Gmail"
+          } 应用`}
+          onClose={() => setAppEditor(undefined)}
+        >
+          <Notice>
+            应用名称只用于后台区分不同凭据。Client Secret
+            保存后不再显示；编辑时留空表示继续使用原 Secret。
+          </Notice>
+          <label>
+            应用名称
+            <input
+              value={appEditor.name}
+              onChange={(event) =>
+                setAppEditor({ ...appEditor, name: event.target.value })
+              }
+              placeholder="例如：客服 Outlook 应用"
+            />
+          </label>
+          <label>
+            Client ID
+            <input
+              value={appEditor.clientId}
+              onChange={(event) =>
+                setAppEditor({ ...appEditor, clientId: event.target.value })
+              }
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <label>
+            Client Secret
+            <input
+              type="password"
+              value={appEditor.clientSecret}
+              onChange={(event) =>
+                setAppEditor({
+                  ...appEditor,
+                  clientSecret: event.target.value,
+                })
+              }
+              placeholder={
+                appEditor.id ? "已保存；留空不替换" : "请输入 Secret Value"
+              }
+              autoComplete="new-password"
+            />
+          </label>
+          {appEditor.provider === "microsoft" && (
+            <label>
+              Secret 到期日
+              <input
+                type="date"
+                value={appEditor.secretExpiresAt || ""}
+                onChange={(event) =>
+                  setAppEditor({
+                    ...appEditor,
+                    secretExpiresAt: event.target.value,
+                  })
+                }
+              />
+            </label>
+          )}
+          <div className="modal-actions">
+            <button onClick={() => setAppEditor(undefined)}>取消</button>
+            <button
+              className="primary"
+              disabled={
+                !appEditor.name.trim() ||
+                !appEditor.clientId.trim() ||
+                (!appEditor.id && !appEditor.clientSecret)
+              }
+              onClick={saveApp}
+            >
+              <Save /> 保存应用
+            </button>
+          </div>
+        </Modal>
+      )}
       {totp && (
         <TotpModal
           data={totp}
@@ -663,6 +766,61 @@ export function SettingsPage() {
     </>
   );
 }
+
+function ProviderAppList({
+  provider,
+  config,
+  onEdit,
+  onDelete,
+}: {
+  provider: "microsoft" | "google";
+  config: ProviderConfig;
+  onEdit: (app: ProviderAppConfig) => void;
+  onDelete: (app: ProviderAppConfig) => void;
+}) {
+  if (!config.apps.length)
+    return (
+      <Notice kind="danger">
+        尚未添加应用。添加邮箱前必须先保存至少一套
+        {provider === "microsoft" ? " Microsoft Graph" : " Google / Gmail"}
+        应用凭据。
+      </Notice>
+    );
+  return (
+    <div className="provider-app-list">
+      {config.apps.map((app) => (
+        <section key={app.id}>
+          <div className="provider-app-card-head">
+            <div>
+              <strong>{app.name}</strong>
+              <span>{app.mailboxCount} 个邮箱正在使用</span>
+            </div>
+            <div className="row-actions">
+              <button onClick={() => onEdit(app)}>
+                <Pencil /> 编辑
+              </button>
+              <button className="danger-link" onClick={() => onDelete(app)}>
+                <Trash2 /> 删除
+              </button>
+            </div>
+          </div>
+          <code>{app.clientId}</code>
+          <div className="provider-app-meta">
+            <span>Secret：已加密保存</span>
+            {provider === "microsoft" && (
+              <span>
+                到期：
+                {app.secretExpiresAt ? fmtDate(app.secretExpiresAt) : "未填写"}
+              </span>
+            )}
+            <span>更新：{fmtDate(app.updatedAt)}</span>
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function PasswordPanel({ onDone }: { onDone: () => void }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");

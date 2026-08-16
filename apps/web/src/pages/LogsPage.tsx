@@ -3,7 +3,7 @@ import { Download, RefreshCw, RotateCcw } from "lucide-react";
 import { api, json } from "../api";
 import { useApp } from "../app-context";
 import type { ProcessingLog } from "../types";
-import { Card, Loading, PageHeader, Status, fmtDate } from "../ui";
+import { Card, Loading, Notice, PageHeader, Status, fmtDate } from "../ui";
 export function LogsPage() {
   const { notify } = useApp();
   const [data, setData] = useState<{
@@ -71,6 +71,10 @@ export function LogsPage() {
           </>
         }
       />
+      <Notice>
+        “服务商已接受”表示 Microsoft Graph 或 Gmail API
+        已确认邮件进入发件邮箱的“已发送”目录，不等于目标邮箱已经投递。最终投递仍可能受对方反垃圾策略、地址规则或提供商延迟影响。
+      </Notice>
       <Card>
         <div className="filters log-filters">
           <label>

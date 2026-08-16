@@ -4,12 +4,40 @@ import { GraphError } from "./graph.service.js";
 import { MicrosoftService } from "./microsoft.service.js";
 
 describe("MicrosoftService", () => {
+  it("refuses to delete an application that still has a mailbox", async () => {
+    const service = new MicrosoftService(
+      {
+        microsoftAppConfig: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: "app-1",
+            name: "Primary",
+            _count: { mailboxes: 1 },
+          }),
+        },
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(service.deleteApp("app-1")).rejects.toMatchObject({
+      code: "MICROSOFT_APP_IN_USE",
+      status: 409,
+    });
+  });
+
   it("changes the client ID and pauses affected work in one transaction", async () => {
     const tx = {
       microsoftAppConfig: {
-        upsert: vi.fn().mockResolvedValue({
+        update: vi.fn().mockResolvedValue({
+          id: "app-1",
+          name: "Primary",
           clientId: "new-client",
+          clientSecretEncrypted: "new-secret-encrypted",
           secretExpiresAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
         }),
       },
       mailbox: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
@@ -19,8 +47,13 @@ describe("MicrosoftService", () => {
     const prisma = {
       microsoftAppConfig: {
         findUnique: vi.fn().mockResolvedValue({
+          id: "app-1",
+          name: "Primary",
           clientId: "old-client",
           clientSecretEncrypted: "old-secret",
+          secretExpiresAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
         }),
       },
       mailbox: { findMany: vi.fn().mockResolvedValue([]) },
@@ -38,20 +71,20 @@ describe("MicrosoftService", () => {
     );
 
     await expect(
-      service.saveConfig({
+      service.updateApp("app-1", {
+        name: "Primary",
         clientId: "new-client",
         clientSecret: "new-secret",
       }),
     ).resolves.toMatchObject({ clientId: "new-client", clientChanged: true });
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(tx.microsoftAppConfig.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.microsoftAppConfig.update).toHaveBeenCalledTimes(1);
     expect(tx.mailbox.updateMany).toHaveBeenCalledTimes(1);
     expect(tx.mailbox.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          provider: "MICROSOFT",
-          microsoftAuthMode: "MSAL_OAUTH",
+          microsoftAppConfigId: "app-1",
         }),
       }),
     );
@@ -61,6 +94,12 @@ describe("MicrosoftService", () => {
 
   it("validates and stores a Client ID + Refresh Token mailbox", async () => {
     const prisma = {
+      microsoftAppConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "app-1",
+          clientId: "11111111-1111-4111-8111-111111111111",
+        }),
+      },
       mailbox: {
         findUnique: vi.fn().mockResolvedValue({
           id: "mailbox-1",
@@ -107,7 +146,7 @@ describe("MicrosoftService", () => {
     );
 
     const result = await service.importRefreshToken({
-      clientId: "11111111-1111-4111-8111-111111111111",
+      appConfigId: "app-1",
       refreshToken: "source-refresh-token-value",
     });
 
@@ -146,6 +185,7 @@ describe("MicrosoftService", () => {
         create: expect.objectContaining({
           microsoftAuthMode: "CLIENT_ID_REFRESH_TOKEN",
           microsoftClientId: "11111111-1111-4111-8111-111111111111",
+          microsoftAppConfigId: "app-1",
           tokenCacheEncrypted: "encrypted-token-cache",
         }),
       }),
@@ -557,13 +597,15 @@ describe("MicrosoftService", () => {
           provider: "MICROSOFT",
           stateHash: "state-hash",
           verifierEncrypted: "encrypted-verifier",
+          microsoftAppConfigId: "app-1",
           redirectAfter: "/mailboxes",
           expiresAt: new Date(Date.now() + 60_000),
         }),
         delete: vi.fn().mockResolvedValue({}),
       },
       microsoftAppConfig: {
-        findUniqueOrThrow: vi.fn().mockResolvedValue({
+        findUnique: vi.fn().mockResolvedValue({
+          id: "app-1",
           clientId: "system-client-id",
           clientSecretEncrypted: "encrypted-secret",
         }),
@@ -622,6 +664,7 @@ describe("MicrosoftService", () => {
         update: expect.objectContaining({
           microsoftAuthMode: "MSAL_OAUTH",
           microsoftClientId: null,
+          microsoftAppConfigId: "app-1",
           tokenCacheEncrypted: "encrypted-msal-cache",
         }),
       }),

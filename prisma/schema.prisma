@@ -112,55 +112,80 @@ model TotpCredential {
 }
 
 model MicrosoftAppConfig {
-  id                    String    @id @default("singleton")
+  id                    String       @id @default(uuid())
+  name                  String
   clientId              String
   clientSecretEncrypted String
   secretExpiresAt       DateTime?
-  updatedAt             DateTime  @updatedAt
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  mailboxes             Mailbox[]    @relation("MailboxMicrosoftApp")
+  oauthStates           OAuthState[] @relation("OAuthStateMicrosoftApp")
+
+  @@index([createdAt])
 }
 
 model GoogleAppConfig {
-  id                    String   @id @default("singleton")
+  id                    String       @id @default(uuid())
+  name                  String
   clientId              String
   clientSecretEncrypted String
-  updatedAt             DateTime @updatedAt
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  mailboxes             Mailbox[]    @relation("MailboxGoogleApp")
+  oauthStates           OAuthState[] @relation("OAuthStateGoogleApp")
+
+  @@index([createdAt])
 }
 
 model OAuthState {
-  id                String   @id
-  provider          MailProvider @default(MICROSOFT)
-  stateHash         String   @unique
-  verifierEncrypted String
-  redirectAfter     String?
-  createdAt         DateTime @default(now())
-  expiresAt         DateTime
+  id                   String              @id
+  provider             MailProvider        @default(MICROSOFT)
+  microsoftAppConfigId String?
+  googleAppConfigId    String?
+  stateHash            String              @unique
+  verifierEncrypted    String
+  redirectAfter        String?
+  createdAt            DateTime            @default(now())
+  expiresAt            DateTime
+  microsoftAppConfig   MicrosoftAppConfig? @relation("OAuthStateMicrosoftApp", fields: [microsoftAppConfigId], references: [id], onDelete: Cascade)
+  googleAppConfig      GoogleAppConfig?    @relation("OAuthStateGoogleApp", fields: [googleAppConfigId], references: [id], onDelete: Cascade)
+
+  @@index([microsoftAppConfigId])
+  @@index([googleAppConfigId])
 }
 
 model Mailbox {
-  id                  String           @id @default(uuid())
-  email               String           @unique
-  provider            MailProvider     @default(MICROSOFT)
-  microsoftAuthMode   MicrosoftAuthMode @default(MSAL_OAUTH)
-  microsoftClientId   String?
-  displayName         String
-  tenantId            String?
-  accountType         String           @default("UNKNOWN")
-  homeAccountId       String
-  tokenCacheEncrypted String
-  status              MailboxStatus    @default(CONNECTED)
-  lastTokenRefreshAt  DateTime?
-  lastErrorCode       String?
-  lastErrorMessage    String?
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
-  task                AutoReplyTask?
-  cursors             FolderCursor[]
-  gmailCursor         GmailCursor?
-  receipts            MessageReceipt[]
-  logs                ProcessingLog[]
+  id                   String              @id @default(uuid())
+  email                String              @unique
+  provider             MailProvider        @default(MICROSOFT)
+  microsoftAuthMode    MicrosoftAuthMode   @default(MSAL_OAUTH)
+  microsoftClientId    String?
+  microsoftAppConfigId String?
+  googleAppConfigId    String?
+  displayName          String
+  tenantId             String?
+  accountType          String              @default("UNKNOWN")
+  homeAccountId        String
+  tokenCacheEncrypted  String
+  status               MailboxStatus       @default(CONNECTED)
+  lastTokenRefreshAt   DateTime?
+  lastErrorCode        String?
+  lastErrorMessage     String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  microsoftAppConfig   MicrosoftAppConfig? @relation("MailboxMicrosoftApp", fields: [microsoftAppConfigId], references: [id], onDelete: Restrict)
+  googleAppConfig      GoogleAppConfig?    @relation("MailboxGoogleApp", fields: [googleAppConfigId], references: [id], onDelete: Restrict)
+  task                 AutoReplyTask?
+  cursors              FolderCursor[]
+  gmailCursor          GmailCursor?
+  receipts             MessageReceipt[]
+  logs                 ProcessingLog[]
 
   @@index([provider, status])
   @@index([provider, microsoftAuthMode, status])
+  @@index([microsoftAppConfigId])
+  @@index([googleAppConfigId])
 }
 
 model AutoReplyTask {
@@ -207,15 +232,15 @@ model FolderCursor {
 }
 
 model GmailCursor {
-  id                 String   @id @default(uuid())
-  mailboxId          String   @unique
+  id                 String    @id @default(uuid())
+  mailboxId          String    @unique
   historyIdEncrypted String?
   pageTokenEncrypted String?
   lastSuccessfulAt   DateTime?
   highWaterAt        DateTime?
   initializedAt      DateTime?
-  updatedAt          DateTime @updatedAt
-  mailbox            Mailbox  @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  updatedAt          DateTime  @updatedAt
+  mailbox            Mailbox   @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
 }
 
 model ReplyTemplate {

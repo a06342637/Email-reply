@@ -56,8 +56,9 @@ export class GmailApiService {
     code: string,
     verifier: string,
     redirectUri: string,
+    appConfigId = "singleton",
   ): Promise<GoogleTokenCache> {
-    const app = await this.config();
+    const app = await this.config(appConfigId);
     const clientSecret = await this.crypto.decryptString(
       app.clientSecretEncrypted,
       "google-client-secret",
@@ -135,7 +136,7 @@ export class GmailApiService {
       throw new AppError("MAILBOX_AUTH_REQUIRED", "邮箱需要重新授权", 409);
     }
 
-    const app = await this.config();
+    const app = await this.config(mailbox.googleAppConfigId || "singleton");
     const clientSecret = await this.crypto.decryptString(
       app.clientSecretEncrypted,
       "google-client-secret",
@@ -168,6 +169,7 @@ export class GmailApiService {
         where: {
           id: mailbox.id,
           provider: "GOOGLE",
+          googleAppConfigId: mailbox.googleAppConfigId,
           status: "CONNECTED",
           tokenCacheEncrypted: mailbox.tokenCacheEncrypted,
         },
@@ -180,7 +182,12 @@ export class GmailApiService {
       });
       if (!persisted.count)
         await this.prisma.mailbox.updateMany({
-          where: { id: mailbox.id, provider: "GOOGLE", status: "CONNECTED" },
+          where: {
+            id: mailbox.id,
+            provider: "GOOGLE",
+            googleAppConfigId: mailbox.googleAppConfigId,
+            status: "CONNECTED",
+          },
           data: {
             lastTokenRefreshAt: new Date(),
             lastErrorCode: null,
@@ -387,14 +394,14 @@ export class GmailApiService {
     });
   }
 
-  private async config() {
+  private async config(id: string) {
     const app = await this.prisma.googleAppConfig.findUnique({
-      where: { id: "singleton" },
+      where: { id },
     });
     if (!app)
       throw new AppError(
-        "GOOGLE_NOT_CONFIGURED",
-        "请先配置 Google Client ID 和 Client Secret",
+        "GOOGLE_APP_NOT_FOUND",
+        "邮箱绑定的 Google 应用不存在，请重新授权",
         409,
       );
     return app;

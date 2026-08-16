@@ -42,7 +42,10 @@ export function DashboardPage() {
     },
   ) => [
     { label: "发现", value: stats?.discovered ?? total(groups) },
-    { label: "已发送", value: stats?.sent ?? count(groups, "SENT", "state") },
+    {
+      label: "服务商已接受",
+      value: stats?.sent ?? count(groups, "SENT", "state"),
+    },
     {
       label: "已跳过",
       value: stats?.filtered ?? count(groups, "FILTERED", "state"),
@@ -79,7 +82,7 @@ export function DashboardPage() {
         />
         <Metric
           icon={<Send />}
-          label="24 小时已发送"
+          label="24 小时服务商已接受"
           value={sent}
           hint={`${queued} 封处理中`}
         />

@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  CheckCircle2,
   GitCommitHorizontal,
   RefreshCw,
   RotateCcw,
@@ -8,7 +7,12 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { api, json } from "./api";
-import { Card, Modal, Notice, fmtDate } from "./ui";
+import { Card, Notice, fmtDate } from "./ui";
+import {
+  isFinishedUpdatePhase,
+  shouldReloadAfterUpdate,
+  UPDATE_PENDING_VERSION_KEY,
+} from "./update-state";
 
 type UpdateStatus = {
   phase: string;
@@ -59,8 +63,9 @@ export function UpdatePanel({
 }) {
   const [status, setStatus] = useState<UpdateStatus>();
   const [loading, setLoading] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [connectionLost, setConnectionLost] = useState(false);
-  const [confirming, setConfirming] = useState(false);
+  const pendingVersionRef = useRef<string | null>(null);
 
   const refresh = useCallback(
     async (silent = false) => {
@@ -90,6 +95,31 @@ export function UpdatePanel({
     return () => window.clearInterval(timer);
   }, [refresh, status?.busy]);
 
+  useEffect(() => {
+    if (!isFinishedUpdatePhase(status?.phase)) return;
+    let pendingVersion = pendingVersionRef.current;
+    try {
+      pendingVersion =
+        window.sessionStorage.getItem(UPDATE_PENDING_VERSION_KEY) ??
+        pendingVersion;
+      window.sessionStorage.removeItem(UPDATE_PENDING_VERSION_KEY);
+    } catch {
+      // The in-memory ref still supports automatic refresh in restricted browsers.
+    }
+    pendingVersionRef.current = null;
+    if (
+      !shouldReloadAfterUpdate(
+        status?.phase,
+        status?.currentVersion,
+        pendingVersion,
+      )
+    )
+      return;
+    notify("升级完成，正在刷新管理后台");
+    const timer = window.setTimeout(() => window.location.reload(), 800);
+    return () => window.clearTimeout(timer);
+  }, [notify, status?.currentVersion, status?.phase]);
+
   async function check() {
     setLoading(true);
     try {
@@ -108,6 +138,32 @@ export function UpdatePanel({
       await refresh(true);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function startUpdate() {
+    const targetVersion = status?.latestVersion;
+    if (!targetVersion || !status.updateAvailable) return;
+    setStarting(true);
+    try {
+      await api("/api/v1/update/apply", json("POST", { targetVersion }));
+      pendingVersionRef.current = targetVersion;
+      try {
+        window.sessionStorage.setItem(
+          UPDATE_PENDING_VERSION_KEY,
+          targetVersion,
+        );
+      } catch {
+        // The current page still keeps polling even if storage is unavailable.
+      }
+      setStatus({ ...status, phase: "QUEUED", busy: true, progress: 1 });
+      notify("升级任务已开始，完成后页面会自动刷新");
+      await refresh(true);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "启动升级失败", "danger");
+      await refresh(true);
+    } finally {
+      setStarting(false);
     }
   }
 
@@ -138,7 +194,7 @@ export function UpdatePanel({
               <h2>在线升级</h2>
               <p>
                 只安装 GitHub 官方仓库 main
-                分支上的正式版本标签，并在切换版本前自动创建加密备份。
+                分支上的正式版本标签。点击升级后直接执行，系统会自动创建加密备份，成功后自动刷新页面。
               </p>
             </div>
             <ServerCog />
@@ -242,19 +298,15 @@ export function UpdatePanel({
             {status.updateAvailable && (
               <button
                 className="primary"
-                disabled={status.busy || Boolean(status.blockedReason)}
-                onClick={() => setConfirming(true)}
+                disabled={
+                  status.busy || starting || Boolean(status.blockedReason)
+                }
+                onClick={startUpdate}
               >
                 <ShieldCheck />
-                安全升级到 v{status.latestVersion}
-              </button>
-            )}
-            {status.phase === "SUCCEEDED" && (
-              <button
-                className="primary soft"
-                onClick={() => location.reload()}
-              >
-                <CheckCircle2 /> 刷新管理后台
+                {starting
+                  ? "正在启动升级"
+                  : `立即升级到 v${status.latestVersion}`}
               </button>
             )}
             {status.phase === "ROLLED_BACK" && (
@@ -265,116 +317,7 @@ export function UpdatePanel({
           </div>
         </div>
       </Card>
-      {confirming && status.latestVersion && (
-        <UpgradeModal
-          targetVersion={status.latestVersion}
-          onClose={() => setConfirming(false)}
-          onStarted={async () => {
-            setConfirming(false);
-            setStatus({ ...status, phase: "QUEUED", busy: true, progress: 1 });
-            notify("升级任务已开始，请保持页面打开");
-            await refresh(true);
-          }}
-        />
-      )}
     </>
-  );
-}
-
-function UpgradeModal({
-  targetVersion,
-  onClose,
-  onStarted,
-}: {
-  targetVersion: string;
-  onClose: () => void;
-  onStarted: () => Promise<void>;
-}) {
-  const [passphrase, setPassphrase] = useState("");
-  const [confirmationPassphrase, setConfirmationPassphrase] = useState("");
-  const [confirmation, setConfirmation] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
-  const valid =
-    passphrase.length >= 12 &&
-    passphrase === confirmationPassphrase &&
-    confirmation === "UPGRADE";
-
-  async function start() {
-    setSubmitting(true);
-    setError("");
-    try {
-      await api(
-        "/api/v1/update/apply",
-        json("POST", {
-          targetVersion,
-          backupPassphrase: passphrase,
-          confirmation,
-        }),
-      );
-      setPassphrase("");
-      setConfirmationPassphrase("");
-      await onStarted();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "启动升级失败");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <Modal
-      title={`升级到 v${targetVersion}`}
-      onClose={submitting ? undefined : onClose}
-    >
-      <Notice>
-        系统会先生成加密备份并构建镜像，然后短暂重启后台和
-        Worker。期间邮件不会丢失，恢复后会继续增量处理。
-      </Notice>
-      {error && <Notice kind="danger">{error}</Notice>}
-      <label>
-        升级前备份口令（至少 12 位）
-        <input
-          type="password"
-          autoComplete="new-password"
-          value={passphrase}
-          onChange={(event) => setPassphrase(event.target.value)}
-        />
-      </label>
-      <label>
-        再次输入备份口令
-        <input
-          type="password"
-          autoComplete="new-password"
-          value={confirmationPassphrase}
-          onChange={(event) => setConfirmationPassphrase(event.target.value)}
-        />
-      </label>
-      <label>
-        输入 UPGRADE 确认
-        <input
-          value={confirmation}
-          onChange={(event) => setConfirmation(event.target.value)}
-        />
-      </label>
-      <p className="muted-copy">
-        备份口令只用于本次升级前备份，不会写入数据库、升级日志或 Docker
-        日志。忘记口令将无法恢复该备份。
-      </p>
-      <div className="modal-actions">
-        <button disabled={submitting} onClick={onClose}>
-          取消
-        </button>
-        <button
-          className="primary"
-          disabled={!valid || submitting}
-          onClick={start}
-        >
-          <ShieldCheck />
-          {submitting ? "正在启动" : "确认并开始升级"}
-        </button>
-      </div>
-    </Modal>
   );
 }
 

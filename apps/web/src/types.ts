@@ -39,6 +39,10 @@ export type Mailbox = {
   provider: "MICROSOFT" | "GOOGLE";
   microsoftAuthMode?: "MSAL_OAUTH" | "CLIENT_ID_REFRESH_TOKEN";
   microsoftClientId?: string | null;
+  microsoftAppConfigId?: string | null;
+  googleAppConfigId?: string | null;
+  microsoftAppConfig?: { id: string; name: string } | null;
+  googleAppConfig?: { id: string; name: string } | null;
   displayName: string;
   tenantId?: string;
   accountType?: string;
@@ -56,6 +60,23 @@ export type Mailbox = {
     initializedAt?: string;
     highWaterAt?: string;
   };
+};
+export type ProviderAppConfig = {
+  id: string;
+  name: string;
+  clientId: string;
+  hasClientSecret: boolean;
+  secretExpiresAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  mailboxCount: number;
+};
+export type ProviderConfig = {
+  configured: boolean;
+  apps: ProviderAppConfig[];
+  publicUrl: string;
+  callbackUrl: string;
+  scopes: string[];
 };
 export type Template = {
   id: string;

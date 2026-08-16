@@ -40,6 +40,60 @@ describe("FilterService", () => {
     expect(result.skip).toBeUndefined();
   });
 
+  it("does not mistake a read-receipt request for an actual receipt", async () => {
+    const result = await service.evaluate(
+      {
+        id: "receipt-request",
+        receivedDateTime: new Date().toISOString(),
+        sender: { emailAddress: { address: "customer@example.net" } },
+        internetMessageHeaders: [
+          {
+            name: "Disposition-Notification-To",
+            value: "customer@example.net",
+          },
+          { name: "Return-Receipt-To", value: "customer@example.net" },
+          { name: "Content-Type", value: "text/plain; charset=utf-8" },
+        ],
+      },
+      "owner@example.com",
+    );
+    expect(result.skip).toBeUndefined();
+  });
+
+  it("skips an actual message disposition notification", async () => {
+    const result = await service.evaluate(
+      {
+        id: "actual-receipt",
+        receivedDateTime: new Date().toISOString(),
+        sender: { emailAddress: { address: "customer@example.net" } },
+        internetMessageHeaders: [
+          {
+            name: "Content-Type",
+            value:
+              'multipart/report; report-type="disposition-notification"; boundary="receipt"',
+          },
+        ],
+      },
+      "owner@example.com",
+    );
+    expect(result.skip).toBe("READ_RECEIPT");
+  });
+
+  it("keeps delivery-status headers classified as delivery reports", async () => {
+    const result = await service.evaluate(
+      {
+        id: "delivery-report",
+        receivedDateTime: new Date().toISOString(),
+        sender: { emailAddress: { address: "relay@example.net" } },
+        internetMessageHeaders: [
+          { name: "Final-Recipient", value: "rfc822; owner@example.com" },
+        ],
+      },
+      "owner@example.com",
+    );
+    expect(result.skip).toBe("DELIVERY_REPORT");
+  });
+
   it("matches AND across condition classes and OR within one class", () => {
     const matched = service.matchRule(
       {

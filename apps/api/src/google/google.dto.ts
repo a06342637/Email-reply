@@ -1,5 +1,20 @@
 import { IsOptional, IsString, Length, MaxLength } from "class-validator";
 
+export class GoogleAppDto {
+  @IsString()
+  @Length(1, 120)
+  name!: string;
+
+  @IsString()
+  @Length(8, 512)
+  clientId!: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(8, 512)
+  clientSecret?: string;
+}
+
 export class GoogleConfigDto {
   @IsString()
   @Length(8, 512)
@@ -12,6 +27,10 @@ export class GoogleConfigDto {
 }
 
 export class GoogleOAuthStartDto {
+  @IsString()
+  @Length(1, 64)
+  appConfigId!: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(512)

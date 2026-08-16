@@ -9,9 +9,13 @@ describe("SchedulerService secret expiry", () => {
     };
     const prisma = {
       microsoftAppConfig: {
-        findUnique: vi.fn().mockResolvedValue({
-          secretExpiresAt: new Date(Date.now() - 60_000),
-        }),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "app-1",
+            name: "Primary Microsoft",
+            secretExpiresAt: new Date(Date.now() - 60_000),
+          },
+        ]),
       },
     };
     const service = new SchedulerService(
@@ -28,14 +32,14 @@ describe("SchedulerService secret expiry", () => {
 
     expect(alerts.open).toHaveBeenCalledWith(
       expect.objectContaining({
-        fingerprint: "microsoft-secret:expired",
+        fingerprint: "microsoft-secret:app-1:expired",
         type: "CLIENT_SECRET_EXPIRED",
       }),
     );
     expect(alerts.open).toHaveBeenCalledTimes(1);
-    expect(alerts.resolve).toHaveBeenCalledWith("microsoft-secret:30");
-    expect(alerts.resolve).toHaveBeenCalledWith("microsoft-secret:7");
-    expect(alerts.resolve).toHaveBeenCalledWith("microsoft-secret:1");
+    expect(alerts.resolve).toHaveBeenCalledWith("microsoft-secret:app-1:30");
+    expect(alerts.resolve).toHaveBeenCalledWith("microsoft-secret:app-1:7");
+    expect(alerts.resolve).toHaveBeenCalledWith("microsoft-secret:app-1:1");
   });
 
   it("deletes only resolved alerts after the configured retention period", async () => {

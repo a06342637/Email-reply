@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type ParsedVersion = {
   major: number;
   minor: number;
@@ -51,6 +53,15 @@ export function normalizeRepositoryUrl(value: string): string {
     .replace(/\/$/, "")
     .replace(/\.git$/i, "")
     .toLowerCase();
+}
+
+export function deriveUpdateBackupPassphrase(updaterToken: string): string {
+  if (updaterToken.length < 32)
+    throw new Error("Updater token is too short for backup key derivation");
+  return createHash("sha256")
+    .update("mailpilot-online-update-backup:v1\0", "utf8")
+    .update(updaterToken, "utf8")
+    .digest("base64url");
 }
 
 export function replaceEnvValue(

@@ -45,36 +45,84 @@ export class MicrosoftService {
   ) {}
 
   async getConfig() {
-    const app = await this.prisma.microsoftAppConfig.findUnique({
-      where: { id: "singleton" },
-    });
+    const [apps, publicUrl] = await Promise.all([
+      this.prisma.microsoftAppConfig.findMany({
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        include: {
+          _count: {
+            select: {
+              mailboxes: { where: { status: { not: "REMOVED" } } },
+            },
+          },
+        },
+      }),
+      this.publicUrl(),
+    ]);
+    const first = apps[0];
     return {
-      configured: Boolean(app),
-      clientId: app?.clientId ?? "",
-      hasClientSecret: Boolean(app?.clientSecretEncrypted),
-      secretExpiresAt: app?.secretExpiresAt,
-      publicUrl: await this.publicUrl(),
-      callbackUrl: `${(await this.publicUrl()) || "https://your-domain.example"}/api/v1/microsoft/oauth/callback`,
+      configured: apps.length > 0,
+      apps: apps.map((app) => this.appView(app)),
+      // Legacy fields keep an older cached admin page functional during an
+      // online upgrade. New clients use the apps array exclusively.
+      clientId: first?.clientId ?? "",
+      hasClientSecret: Boolean(first?.clientSecretEncrypted),
+      secretExpiresAt: first?.secretExpiresAt,
+      publicUrl,
+      callbackUrl: `${publicUrl || "https://your-domain.example"}/api/v1/microsoft/oauth/callback`,
       scopes: OAUTH_SCOPES,
     };
   }
 
-  async saveConfig(input: {
+  async createApp(input: {
+    name: string;
     clientId: string;
     clientSecret?: string;
     secretExpiresAt?: string | null;
   }) {
-    const clientId = input.clientId.trim();
-    const existing = await this.prisma.microsoftAppConfig.findUnique({
-      where: { id: "singleton" },
-    });
-    if (!existing && !input.clientSecret)
+    if (!input.clientSecret)
       throw new AppError(
         "CLIENT_SECRET_REQUIRED",
-        "首次配置必须填写 Client Secret",
+        "新增 Microsoft 应用必须填写 Client Secret",
         400,
       );
-    if (existing && existing.clientId !== clientId && !input.clientSecret)
+    const row = await this.prisma.microsoftAppConfig.create({
+      data: {
+        name: this.appName(input.name),
+        clientId: input.clientId.trim(),
+        clientSecretEncrypted: await this.crypto.encryptString(
+          input.clientSecret,
+          "microsoft-client-secret",
+        ),
+        secretExpiresAt: input.secretExpiresAt
+          ? new Date(input.secretExpiresAt)
+          : null,
+      },
+      include: { _count: { select: { mailboxes: true } } },
+    });
+    return this.appView(row);
+  }
+
+  async updateApp(
+    id: string,
+    input: {
+      name: string;
+      clientId: string;
+      clientSecret?: string;
+      secretExpiresAt?: string | null;
+    },
+  ) {
+    const existing = await this.prisma.microsoftAppConfig.findUnique({
+      where: { id },
+    });
+    if (!existing)
+      throw new AppError(
+        "MICROSOFT_APP_NOT_FOUND",
+        "Microsoft 应用不存在或已删除",
+        404,
+      );
+    const clientId = input.clientId.trim();
+    const clientChanged = existing.clientId !== clientId;
+    if (clientChanged && !input.clientSecret)
       throw new AppError(
         "CLIENT_SECRET_REQUIRED",
         "更换 Client ID 时必须同时填写对应的 Client Secret",
@@ -85,48 +133,37 @@ export class MicrosoftService {
           input.clientSecret,
           "microsoft-client-secret",
         )
-      : existing!.clientSecretEncrypted;
-    const clientChanged = Boolean(existing && existing.clientId !== clientId);
-    const configWrite = {
-      where: { id: "singleton" },
-      create: {
-        id: "singleton",
-        clientId,
-        clientSecretEncrypted: encrypted,
-        secretExpiresAt: input.secretExpiresAt
-          ? new Date(input.secretExpiresAt)
-          : null,
-      },
-      update: {
-        clientId,
-        clientSecretEncrypted: encrypted,
-        secretExpiresAt: input.secretExpiresAt
-          ? new Date(input.secretExpiresAt)
-          : null,
-      },
+      : existing.clientSecretEncrypted;
+    const data = {
+      name: this.appName(input.name),
+      clientId,
+      clientSecretEncrypted: encrypted,
+      secretExpiresAt: input.secretExpiresAt
+        ? new Date(input.secretExpiresAt)
+        : null,
     };
     const saved = clientChanged
       ? await this.prisma.$transaction(async (tx) => {
-          const row = await tx.microsoftAppConfig.upsert(configWrite);
+          const row = await tx.microsoftAppConfig.update({
+            where: { id },
+            data,
+          });
           await tx.mailbox.updateMany({
             where: {
-              provider: "MICROSOFT",
-              microsoftAuthMode: "MSAL_OAUTH",
+              microsoftAppConfigId: id,
               status: { not: "REMOVED" },
             },
             data: {
               status: "AUTH_REQUIRED",
               lastErrorCode: "CLIENT_ID_CHANGED",
-              lastErrorMessage: "Microsoft Client ID 已更改，需要重新授权邮箱",
+              lastErrorMessage:
+                "所选 Microsoft 应用的 Client ID 已更改，需要重新授权邮箱",
             },
           });
           await tx.autoReplyTask.updateMany({
             where: {
               status: { in: ["RUNNING", "INITIALIZING"] },
-              mailbox: {
-                provider: "MICROSOFT",
-                microsoftAuthMode: "MSAL_OAUTH",
-              },
+              mailbox: { microsoftAppConfigId: id },
             },
             data: { status: "PAUSED", pausedAt: new Date(), nextPollAt: null },
           });
@@ -135,20 +172,15 @@ export class MicrosoftService {
             USING "MessageReceipt" AS receipt, "Mailbox" AS mailbox
             WHERE outbox."aggregateId" = receipt."id"
               AND receipt."mailboxId" = mailbox."id"
-              AND mailbox."provider" = 'MICROSOFT'::"MailProvider"
-              AND mailbox."microsoftAuthMode" = 'MSAL_OAUTH'::"MicrosoftAuthMode"
+              AND mailbox."microsoftAppConfigId" = ${id}
               AND outbox."kind" IN ('PROCESS_MESSAGE', 'VERIFY_SEND')
           `;
           return row;
         })
-      : await this.prisma.microsoftAppConfig.upsert(configWrite);
+      : await this.prisma.microsoftAppConfig.update({ where: { id }, data });
     if (clientChanged) {
       const affected = await this.prisma.mailbox.findMany({
-        where: {
-          provider: "MICROSOFT",
-          microsoftAuthMode: "MSAL_OAUTH",
-          status: "AUTH_REQUIRED",
-        },
+        where: { microsoftAppConfigId: id, status: "AUTH_REQUIRED" },
         select: { id: true },
       });
       for (const mailbox of affected)
@@ -158,14 +190,19 @@ export class MicrosoftService {
           severity: "CRITICAL",
           title: "邮箱需要重新授权",
           message: "Microsoft Client ID 已更改，自动回复已暂停。",
-          metadata: { mailboxId: mailbox.id, code: "CLIENT_ID_CHANGED" },
+          metadata: {
+            mailboxId: mailbox.id,
+            appConfigId: id,
+            code: "CLIENT_ID_CHANGED",
+          },
         });
     }
     let refreshAttempted = 0;
     let refreshFailed = 0;
-    if (existing && input.clientSecret && !clientChanged) {
+    if (input.clientSecret && !clientChanged) {
       const mailboxes = await this.prisma.mailbox.findMany({
         where: {
+          microsoftAppConfigId: id,
           provider: "MICROSOFT",
           microsoftAuthMode: "MSAL_OAUTH",
           status: "CONNECTED",
@@ -182,12 +219,65 @@ export class MicrosoftService {
       }
     }
     return {
-      clientId: saved.clientId,
-      secretExpiresAt: saved.secretExpiresAt,
+      ...this.appView(saved),
       clientChanged,
       refreshAttempted,
       refreshFailed,
     };
+  }
+
+  async deleteApp(id: string): Promise<{ name: string }> {
+    const app = await this.prisma.microsoftAppConfig.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: {
+            mailboxes: { where: { status: { not: "REMOVED" } } },
+          },
+        },
+      },
+    });
+    if (!app)
+      throw new AppError(
+        "MICROSOFT_APP_NOT_FOUND",
+        "Microsoft 应用不存在或已删除",
+        404,
+      );
+    if (app._count.mailboxes)
+      throw new AppError(
+        "MICROSOFT_APP_IN_USE",
+        "仍有邮箱使用此 Microsoft 应用，请先移除邮箱或改用其他应用重新授权",
+        409,
+        { mailboxes: app._count.mailboxes },
+      );
+    await this.prisma.$transaction([
+      this.prisma.mailbox.updateMany({
+        where: { microsoftAppConfigId: id, status: "REMOVED" },
+        data: { microsoftAppConfigId: null },
+      }),
+      this.prisma.oAuthState.deleteMany({
+        where: { microsoftAppConfigId: id },
+      }),
+      this.prisma.microsoftAppConfig.delete({ where: { id } }),
+    ]);
+    for (const suffix of ["30", "7", "1", "expired"])
+      await this.alerts
+        .resolve(`microsoft-secret:${id}:${suffix}`)
+        .catch(() => undefined);
+    return { name: app.name };
+  }
+
+  async saveConfig(input: {
+    clientId: string;
+    clientSecret?: string;
+    secretExpiresAt?: string | null;
+  }) {
+    const existing = await this.prisma.microsoftAppConfig.findFirst({
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    return existing
+      ? this.updateApp(existing.id, { ...input, name: existing.name })
+      : this.createApp({ ...input, name: "默认 Microsoft 应用" });
   }
 
   async setPublicUrl(value: string): Promise<void> {
@@ -209,6 +299,7 @@ export class MicrosoftService {
   }
 
   async startOAuth(
+    appConfigId: string,
     redirectAfter = "/mailboxes",
   ): Promise<{ authorizationUrl: string }> {
     const publicUrl = await this.publicUrl();
@@ -220,13 +311,13 @@ export class MicrosoftService {
       );
     }
     const app = await this.prisma.microsoftAppConfig.findUnique({
-      where: { id: "singleton" },
+      where: { id: appConfigId },
     });
     if (!app)
       throw new AppError(
-        "MICROSOFT_NOT_CONFIGURED",
-        "请先配置 Microsoft Client ID 和 Client Secret",
-        409,
+        "MICROSOFT_APP_NOT_FOUND",
+        "所选 Microsoft 应用不存在，请重新选择",
+        404,
       );
     const rawState = this.crypto.randomToken(32);
     const verifier = this.crypto.randomToken(64);
@@ -236,6 +327,8 @@ export class MicrosoftService {
       data: {
         id,
         provider: "MICROSOFT",
+        microsoftAppConfigId: app.id,
+        googleAppConfigId: null,
         stateHash: this.crypto.hmac(rawState),
         verifierEncrypted: await this.crypto.encryptString(
           verifier,
@@ -285,9 +378,15 @@ export class MicrosoftService {
         400,
       );
     }
-    const app = await this.prisma.microsoftAppConfig.findUniqueOrThrow({
-      where: { id: "singleton" },
+    const app = await this.prisma.microsoftAppConfig.findUnique({
+      where: { id: state.microsoftAppConfigId || "singleton" },
     });
+    if (!app)
+      throw new AppError(
+        "MICROSOFT_APP_NOT_FOUND",
+        "授权使用的 Microsoft 应用已被删除，请重新连接",
+        409,
+      );
     const publicUrl = await this.publicUrl();
     const verifier = await this.crypto.decryptString(
       state.verifierEncrypted,
@@ -387,6 +486,8 @@ export class MicrosoftService {
         provider: "MICROSOFT",
         microsoftAuthMode: "MSAL_OAUTH",
         microsoftClientId: null,
+        microsoftAppConfigId: app.id,
+        googleAppConfigId: null,
         displayName: profile.displayName || result.account.name || email,
         tenantId: result.account.tenantId,
         accountType:
@@ -403,6 +504,8 @@ export class MicrosoftService {
         provider: "MICROSOFT",
         microsoftAuthMode: "MSAL_OAUTH",
         microsoftClientId: null,
+        microsoftAppConfigId: app.id,
+        googleAppConfigId: null,
         displayName: profile.displayName || result.account.name || email,
         tenantId: result.account.tenantId,
         accountType:
@@ -430,7 +533,8 @@ export class MicrosoftService {
 
   async importRefreshToken(
     input: {
-      clientId: string;
+      appConfigId?: string;
+      clientId?: string;
       refreshToken: string;
     },
     context: { requestId?: string } = {},
@@ -440,7 +544,36 @@ export class MicrosoftService {
     displayName: string;
     authMode: "CLIENT_ID_REFRESH_TOKEN";
   }> {
-    const clientId = input.clientId.trim();
+    const appConfigId = input.appConfigId?.trim() || null;
+    const selectedApp = appConfigId
+      ? await this.prisma.microsoftAppConfig.findUnique({
+          where: { id: appConfigId },
+        })
+      : null;
+    if (appConfigId && !selectedApp)
+      throw new AppError(
+        "MICROSOFT_APP_NOT_FOUND",
+        "所选 Microsoft 应用不存在，请重新选择",
+        404,
+      );
+    const suppliedClientId = input.clientId?.trim() || "";
+    if (
+      selectedApp &&
+      suppliedClientId &&
+      suppliedClientId !== selectedApp.clientId
+    )
+      throw new AppError(
+        "MICROSOFT_CLIENT_ID_MISMATCH",
+        "填写的 Client ID 与所选 Microsoft 应用不一致",
+        400,
+      );
+    const clientId = selectedApp?.clientId || suppliedClientId;
+    if (!clientId)
+      throw new AppError(
+        "MICROSOFT_CLIENT_ID_REQUIRED",
+        "请选择 Microsoft 应用或填写 Client ID",
+        400,
+      );
     const refreshToken = input.refreshToken.trim();
     const startedAt = Date.now();
     const operationController = new AbortController();
@@ -564,6 +697,8 @@ export class MicrosoftService {
         provider: "MICROSOFT",
         microsoftAuthMode: "CLIENT_ID_REFRESH_TOKEN",
         microsoftClientId: clientId,
+        microsoftAppConfigId: selectedApp?.id ?? null,
+        googleAppConfigId: null,
         displayName: profile.displayName || email,
         tenantId: identity.tenantId,
         accountType,
@@ -576,6 +711,8 @@ export class MicrosoftService {
         provider: "MICROSOFT",
         microsoftAuthMode: "CLIENT_ID_REFRESH_TOKEN",
         microsoftClientId: clientId,
+        microsoftAppConfigId: selectedApp?.id ?? null,
+        googleAppConfigId: null,
         displayName: profile.displayName || email,
         tenantId: identity.tenantId,
         accountType,
@@ -812,6 +949,39 @@ export class MicrosoftService {
     if (error.retryAfterSeconds)
       details.retryAfterSeconds = error.retryAfterSeconds;
     return details;
+  }
+
+  private appName(value: string): string {
+    const name = value.trim();
+    if (!name)
+      throw new AppError(
+        "MICROSOFT_APP_NAME_REQUIRED",
+        "Microsoft 应用名称不能为空",
+        400,
+      );
+    return name;
+  }
+
+  private appView(app: {
+    id: string;
+    name: string;
+    clientId: string;
+    clientSecretEncrypted: string;
+    secretExpiresAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+    _count?: { mailboxes: number };
+  }) {
+    return {
+      id: app.id,
+      name: app.name,
+      clientId: app.clientId,
+      hasClientSecret: Boolean(app.clientSecretEncrypted),
+      secretExpiresAt: app.secretExpiresAt,
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+      mailboxCount: app._count?.mailboxes ?? 0,
+    };
   }
 
   async publicUrl(): Promise<string> {

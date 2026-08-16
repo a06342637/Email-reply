@@ -8,7 +8,7 @@ function serviceFixture() {
       upsert,
       findMany: vi.fn().mockResolvedValue([]),
     },
-    microsoftAppConfig: { findUnique: vi.fn().mockResolvedValue(null) },
+    microsoftAppConfig: { findFirst: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn(async (operations: Array<Promise<unknown>>) =>
       Promise.all(operations),
     ),

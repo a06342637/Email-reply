@@ -10,6 +10,7 @@ import { AppConfig } from "./core/config.js";
 import { CryptoService } from "./core/crypto.js";
 import { BackupService } from "./backup/backup.service.js";
 import { RestoreBarrierService } from "./backup/restore-barrier.service.js";
+import { deriveUpdateBackupPassphrase } from "./updates/updater-core.js";
 
 const prisma = new PrismaService();
 const config = new AppConfig();
@@ -151,11 +152,16 @@ async function main(): Promise<void> {
     } else stdout.write(buffer);
     return;
   }
+  if (args[0] === "backup" && args[1] === "show-update-passphrase") {
+    console.log(deriveUpdateBackupPassphrase(config.updaterToken));
+    return;
+  }
   console.log("用法:");
   console.log("  autoreply admin show-username");
   console.log("  autoreply admin reset-password [--random] [--disable-totp]");
   console.log("  autoreply doctor");
   console.log("  autoreply backup export [--output /path/file.mpbak]");
+  console.log("  autoreply backup show-update-passphrase");
   process.exitCode = 2;
 }
 

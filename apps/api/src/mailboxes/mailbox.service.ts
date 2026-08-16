@@ -21,6 +21,10 @@ export class MailboxService {
         provider: true,
         microsoftAuthMode: true,
         microsoftClientId: true,
+        microsoftAppConfigId: true,
+        googleAppConfigId: true,
+        microsoftAppConfig: { select: { id: true, name: true } },
+        googleAppConfig: { select: { id: true, name: true } },
         displayName: true,
         tenantId: true,
         accountType: true,
@@ -177,6 +181,8 @@ export class MailboxService {
           status: "REMOVED",
           microsoftAuthMode: "MSAL_OAUTH",
           microsoftClientId: null,
+          microsoftAppConfigId: null,
+          googleAppConfigId: null,
           homeAccountId: `removed:${id}`,
           tokenCacheEncrypted: await this.crypto.encryptString(
             "{}",
@@ -475,10 +481,10 @@ export class MailboxService {
     const template = await this.prisma.replyTemplate.findUnique({
       where: { id },
     });
-    if (!template || template.archivedAt || !template.publishedRevisionId) {
+    if (!template || !template.publishedRevisionId) {
       throw new AppError(
         "TEMPLATE_NOT_PUBLISHED",
-        "所选模板不存在、已归档或尚未发布",
+        "所选模板不存在或尚未发布",
         409,
       );
     }

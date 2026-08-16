@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { api } from "./api";
+import { api, AUTH_REQUIRED_EVENT } from "./api";
 import type { Admin, UiSettings } from "./types";
 import { AppContext } from "./app-context";
 import { Shell } from "./shell";
@@ -36,6 +36,12 @@ function App() {
     } catch {
       setAdmin(null);
     }
+  }, []);
+  useEffect(() => {
+    const handleAuthRequired = () => setAdmin(null);
+    window.addEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired);
+    return () =>
+      window.removeEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired);
   }, []);
   useEffect(() => {
     void refreshMe();

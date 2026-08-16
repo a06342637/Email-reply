@@ -95,6 +95,28 @@ export class BackupService {
     this.validatePayload(data);
     await this.assertTargetCompatible(data);
     const tables = data.tables as Record<string, any>;
+    const microsoftConfigs = Array.isArray(tables.microsoftConfigs)
+      ? tables.microsoftConfigs
+      : tables.microsoftConfig
+        ? [
+            {
+              id: "singleton",
+              name: "默认 Microsoft 应用",
+              ...tables.microsoftConfig,
+            },
+          ]
+        : [];
+    const googleConfigs = Array.isArray(tables.googleConfigs)
+      ? tables.googleConfigs
+      : tables.googleConfig
+        ? [
+            {
+              id: "singleton",
+              name: "默认 Google / Gmail 应用",
+              ...tables.googleConfig,
+            },
+          ]
+        : [];
     const barrier = await this.barrier.acquire();
     try {
       // The shared barrier is checked immediately before every poll, process
@@ -118,14 +140,13 @@ export class BackupService {
               update: { value: row.value },
             });
           }
-          for (const row of tables.microsoftConfig
-            ? [tables.microsoftConfig]
-            : []) {
+          for (const row of microsoftConfigs) {
             const secret = row.clientSecretPlain as string;
             await tx.microsoftAppConfig.upsert({
-              where: { id: "singleton" },
+              where: { id: row.id },
               create: {
-                id: "singleton",
+                id: row.id,
+                name: row.name || "Microsoft 应用",
                 clientId: row.clientId,
                 clientSecretEncrypted: await this.crypto.encryptString(
                   secret,
@@ -134,6 +155,7 @@ export class BackupService {
                 secretExpiresAt: this.date(row.secretExpiresAt),
               },
               update: {
+                name: row.name || "Microsoft 应用",
                 clientId: row.clientId,
                 clientSecretEncrypted: await this.crypto.encryptString(
                   secret,
@@ -143,12 +165,13 @@ export class BackupService {
               },
             });
           }
-          for (const row of tables.googleConfig ? [tables.googleConfig] : []) {
+          for (const row of googleConfigs) {
             const secret = row.clientSecretPlain as string;
             await tx.googleAppConfig.upsert({
-              where: { id: "singleton" },
+              where: { id: row.id },
               create: {
-                id: "singleton",
+                id: row.id,
+                name: row.name || "Google / Gmail 应用",
                 clientId: row.clientId,
                 clientSecretEncrypted: await this.crypto.encryptString(
                   secret,
@@ -156,6 +179,7 @@ export class BackupService {
                 ),
               },
               update: {
+                name: row.name || "Google / Gmail 应用",
                 clientId: row.clientId,
                 clientSecretEncrypted: await this.crypto.encryptString(
                   secret,
@@ -177,6 +201,14 @@ export class BackupService {
               microsoftAuthMode === "CLIENT_ID_REFRESH_TOKEN"
                 ? row.microsoftClientId
                 : null;
+            const { microsoftAppConfigId, googleAppConfigId } =
+              this.restoredProviderApps(
+                row,
+                provider,
+                microsoftAuthMode,
+                microsoftConfigs,
+                googleConfigs,
+              );
             const restoredMailboxStatus = [
               "CONNECTED",
               "AUTH_REQUIRED",
@@ -192,6 +224,8 @@ export class BackupService {
                 provider,
                 microsoftAuthMode,
                 microsoftClientId,
+                microsoftAppConfigId,
+                googleAppConfigId,
                 tokenCacheEncrypted: await this.crypto.encryptString(
                   row.tokenCachePlain,
                   provider === "GOOGLE"
@@ -207,6 +241,8 @@ export class BackupService {
                 provider,
                 microsoftAuthMode,
                 microsoftClientId,
+                microsoftAppConfigId,
+                googleAppConfigId,
                 tokenCacheEncrypted: await this.crypto.encryptString(
                   row.tokenCachePlain,
                   provider === "GOOGLE"
@@ -446,8 +482,8 @@ export class BackupService {
 
   private async collect() {
     const [
-      microsoftConfig,
-      googleConfig,
+      microsoftConfigs,
+      googleConfigs,
       mailboxes,
       tasks,
       cursors,
@@ -467,8 +503,8 @@ export class BackupService {
     ] = await this.prisma.$transaction(
       (tx) =>
         Promise.all([
-          tx.microsoftAppConfig.findUnique({ where: { id: "singleton" } }),
-          tx.googleAppConfig.findUnique({ where: { id: "singleton" } }),
+          tx.microsoftAppConfig.findMany(),
+          tx.googleAppConfig.findMany(),
           tx.mailbox.findMany(),
           tx.autoReplyTask.findMany(),
           tx.folderCursor.findMany(),
@@ -493,25 +529,24 @@ export class BackupService {
       appVersion: this.config.version,
       createdAt: new Date().toISOString(),
       tables: {
-        microsoftConfig: microsoftConfig
-          ? {
-              clientId: microsoftConfig.clientId,
-              secretExpiresAt: microsoftConfig.secretExpiresAt,
-              clientSecretPlain: await this.crypto.decryptString(
-                microsoftConfig.clientSecretEncrypted,
-                "microsoft-client-secret",
-              ),
-            }
-          : null,
-        googleConfig: googleConfig
-          ? {
-              clientId: googleConfig.clientId,
-              clientSecretPlain: await this.crypto.decryptString(
-                googleConfig.clientSecretEncrypted,
-                "google-client-secret",
-              ),
-            }
-          : null,
+        microsoftConfigs: await Promise.all(
+          microsoftConfigs.map(async ({ clientSecretEncrypted, ...row }) => ({
+            ...row,
+            clientSecretPlain: await this.crypto.decryptString(
+              clientSecretEncrypted,
+              "microsoft-client-secret",
+            ),
+          })),
+        ),
+        googleConfigs: await Promise.all(
+          googleConfigs.map(async ({ clientSecretEncrypted, ...row }) => ({
+            ...row,
+            clientSecretPlain: await this.crypto.decryptString(
+              clientSecretEncrypted,
+              "google-client-secret",
+            ),
+          })),
+        ),
         mailboxes: await Promise.all(
           mailboxes.map(async ({ tokenCacheEncrypted, ...row }) => ({
             ...row,
@@ -706,6 +741,32 @@ export class BackupService {
       );
   }
 
+  private restoredProviderApps(
+    row: Record<string, any>,
+    provider: "MICROSOFT" | "GOOGLE",
+    microsoftAuthMode: "MSAL_OAUTH" | "CLIENT_ID_REFRESH_TOKEN",
+    microsoftConfigs: Array<{ id: string }>,
+    googleConfigs: Array<{ id: string }>,
+  ): {
+    microsoftAppConfigId: string | null;
+    googleAppConfigId: string | null;
+  } {
+    return {
+      microsoftAppConfigId:
+        provider === "MICROSOFT"
+          ? (row.microsoftAppConfigId ??
+            (microsoftAuthMode === "MSAL_OAUTH"
+              ? microsoftConfigs[0]?.id
+              : null) ??
+            null)
+          : null,
+      googleAppConfigId:
+        provider === "GOOGLE"
+          ? (row.googleAppConfigId ?? googleConfigs[0]?.id ?? null)
+          : null,
+    };
+  }
+
   private validatePayload(data: any): void {
     const tables = data?.tables as Record<string, unknown> | undefined;
     if (!tables) throw new AppError("BACKUP_INVALID", "备份内容无效", 400);
@@ -735,14 +796,34 @@ export class BackupService {
       !Array.isArray(tables.gmailCursors)
     )
       throw new AppError("BACKUP_INVALID", "备份包含无效的 Gmail 游标表", 400);
+    for (const key of ["microsoftConfigs", "googleConfigs"]) {
+      if (tables[key] !== undefined && !Array.isArray(tables[key]))
+        throw new AppError(
+          "BACKUP_INVALID",
+          `备份包含无效的应用配置表：${key}`,
+          400,
+        );
+    }
 
     const rows = (key: string) => tables[key] as Array<Record<string, any>>;
+    const microsoftConfigs = Array.isArray(tables.microsoftConfigs)
+      ? rows("microsoftConfigs")
+      : tables.microsoftConfig
+        ? [{ id: "singleton", ...tables.microsoftConfig }]
+        : [];
+    const googleConfigs = Array.isArray(tables.googleConfigs)
+      ? rows("googleConfigs")
+      : tables.googleConfig
+        ? [{ id: "singleton", ...tables.googleConfig }]
+        : [];
     const duplicates = (values: string[]) =>
       values.filter((value, index) => values.indexOf(value) !== index);
     const duplicateIds = duplicates(
       [
         ...requiredArrays,
         ...(tables.gmailCursors ? ["gmailCursors"] : []),
+        ...(tables.microsoftConfigs ? ["microsoftConfigs"] : []),
+        ...(tables.googleConfigs ? ["googleConfigs"] : []),
       ].flatMap((key) =>
         rows(key).map((row) => `${key}:${String(row.id ?? row.key ?? "")}`),
       ),
@@ -766,6 +847,23 @@ export class BackupService {
     const revisionIds = new Set(rows("revisions").map((row) => row.id));
     const ruleIds = new Set(rows("rules").map((row) => row.id));
     const receiptIds = new Set(rows("receipts").map((row) => row.id));
+    const microsoftConfigIds = new Set(microsoftConfigs.map((row) => row.id));
+    const googleConfigIds = new Set(googleConfigs.map((row) => row.id));
+    for (const row of [...microsoftConfigs, ...googleConfigs]) {
+      if (
+        typeof row.id !== "string" ||
+        !row.id ||
+        typeof row.clientId !== "string" ||
+        !row.clientId ||
+        typeof row.clientSecretPlain !== "string" ||
+        !row.clientSecretPlain
+      )
+        throw new AppError(
+          "BACKUP_PROVIDER_APP_INVALID",
+          "备份包含无效的邮箱提供商应用配置",
+          400,
+        );
+    }
     for (const row of rows("mailboxes")) {
       const provider = row.provider ?? "MICROSOFT";
       if (!["MICROSOFT", "GOOGLE"].includes(provider))
@@ -826,6 +924,25 @@ export class BackupService {
           );
         }
       }
+      if (
+        row.microsoftAppConfigId != null &&
+        (provider !== "MICROSOFT" ||
+          !microsoftConfigIds.has(row.microsoftAppConfigId))
+      )
+        throw new AppError(
+          "BACKUP_REFERENCE_INVALID",
+          "备份关联无效：mailboxes.microsoftAppConfigId",
+          400,
+        );
+      if (
+        row.googleAppConfigId != null &&
+        (provider !== "GOOGLE" || !googleConfigIds.has(row.googleAppConfigId))
+      )
+        throw new AppError(
+          "BACKUP_REFERENCE_INVALID",
+          "备份关联无效：mailboxes.googleAppConfigId",
+          400,
+        );
     }
     const requireReference = (
       source: string,

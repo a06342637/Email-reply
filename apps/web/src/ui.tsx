@@ -161,7 +161,7 @@ export function translate(value: string): string {
         CREATING_DRAFT: "创建草稿",
         DRAFT_READY: "草稿就绪",
         SENDING: "发送中",
-        SENT: "已发送",
+        SENT: "服务商已接受",
         FAILED_CONFIRMED: "确认失败",
         UNCERTAIN: "状态不确定",
         OPEN: "未处理",

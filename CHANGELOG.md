@@ -1,5 +1,32 @@
 # 更新日志
 
+## v0.16 - 2026-08-16
+
+- Microsoft Graph 与 Google Cloud / Gmail API 改为支持多套应用配置；每套配置具有独立名称、Client ID、加密 Secret、使用邮箱数量和审计记录。
+- 新增、重新授权 Microsoft 或 Gmail 邮箱时可选择已保存的应用；Microsoft Client ID + Refresh Token 导入既可选择已保存应用，也可继续手工填写独立 Client ID。
+- OAuth state、邮箱、Token 刷新、Client ID 变更暂停、Secret 到期告警和删除保护全部按所选应用隔离；修改一套应用不会影响绑定其他应用的邮箱。
+- 旧版 `singleton` Microsoft/Google 配置会自动迁移为默认应用并关联原邮箱；加密备份恢复支持多应用关联，同时继续兼容旧单应用备份。
+- 修复独立 Client ID + Refresh Token 邮箱重新授权时错误预选第一套已保存应用的问题，并阻止删除仍被邮箱使用的提供商应用。
+- Microsoft 发送核验只有在 Graph 同时返回 `isDraft=false` 和 `sentDateTime` 后才进入 `SENT`，不再因草稿刚离开草稿箱就过早显示成功。
+- 后台把 `SENT` 明确显示为“服务商已接受”，并说明这只代表邮件进入发件邮箱已发送目录，不是目标邮箱的最终送达回执。
+- 新增多应用选择、删除保护、备份关联、独立 Client ID 恢复、发送时间核验和前端选择逻辑回归测试；版本升级为 v0.16（npm 0.0.16）。
+
+## v0.15 - 2026-08-16
+
+- 后台在线升级取消备份口令和 `UPGRADE` 二次输入；点击“立即升级”后直接开始，仍会自动生成加密备份、保留回滚镜像并执行完整健康检查。
+- 在线升级备份改用升级器内部密钥派生的专用口令，口令不进入浏览器请求、数据库或日志；app 会兼容仍要求旧字段的上一版 updater，服务器 root 可通过 `docker compose exec app autoreply backup show-update-passphrase` 获取恢复口令。
+- 升级页面持续轮询独立 updater，升级成功后自动刷新后台；失败或自动回滚时不会误刷新。
+- 模板中心移除“归档”，统一改为永久删除；以前已归档的模板会重新出现在列表中，可直接删除。
+- 删除模板时会永久删除其修订与附件；仍被任务、规则或处理中邮件引用的模板会被安全阻止，历史处理日志继续保留模板名称快照。
+- 新增一键升级、自动刷新状态、自动备份口令派生和模板删除保护回归测试；版本升级为 v0.15（npm 0.0.15）。
+
+## v0.14 - 2026-08-16
+
+- 修复普通邮件携带 `Disposition-Notification-To` 或 `Return-Receipt-To` 阅读回执请求头时被错误跳过的问题；现在只过滤实际的 MDN 阅读回执，并继续将 DSN 投递报告归类为投递报告。
+- 修复后台管理员会话在运行中失效后页面不会自动返回登录页的问题；受保护 API 返回 401 时会清空内存中的 CSRF 状态并统一触发重新登录，登录接口自身的凭据错误不会误触发。
+- 强化命令行 `update.sh`：升级前必须确认 `origin` 为官方 GitHub 仓库、当前处于 `main` 分支，并拒绝未知远程仓库和 detached HEAD 状态。
+- 修正 UI 冒烟测试中“可升级版本低于当前版本”的不一致数据；新增邮件过滤、前端会话失效和升级脚本安全保护回归测试，版本升级为 v0.14（npm 0.0.14）。
+
 ## v0.13 - 2026-08-16
 
 - 修复 Microsoft Client ID + Refresh Token 导入在 Token Endpoint、`/me`、inbox 和 junkemail 超时叠加时，可能先被 Nginx/Cloudflare 中断并显示通用 HTTP 502 的问题。

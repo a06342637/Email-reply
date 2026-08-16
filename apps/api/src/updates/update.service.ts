@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { AppConfig } from "../core/config.js";
 import { AppError } from "../core/http.js";
+import { deriveUpdateBackupPassphrase } from "./updater-core.js";
 
 type UpdaterErrorBody = {
   error?: { code?: string; message?: string };
@@ -11,7 +12,7 @@ export class UpdateService {
   constructor(private readonly config: AppConfig) {}
 
   async status(): Promise<Record<string, unknown>> {
-    if (!this.config.updaterUrl || !this.config.updaterToken)
+    if (!this.config.updaterUrl || this.config.updaterToken.length < 32)
       return {
         phase: "DISABLED",
         busy: false,
@@ -38,17 +39,24 @@ export class UpdateService {
     return this.request("/v1/check", "POST", {}, 60_000);
   }
 
-  apply(input: {
-    targetVersion: string;
-    backupPassphrase: string;
-    confirmation: string;
-  }): Promise<Record<string, unknown>> {
+  apply(input: { targetVersion: string }): Promise<Record<string, unknown>> {
     this.assertConfigured();
-    return this.request("/v1/apply", "POST", input, 15_000);
+    return this.request(
+      "/v1/apply",
+      "POST",
+      {
+        targetVersion: input.targetVersion,
+        backupPassphrase: deriveUpdateBackupPassphrase(
+          this.config.updaterToken,
+        ),
+        confirmation: "UPGRADE",
+      },
+      15_000,
+    );
   }
 
   private assertConfigured(): void {
-    if (!this.config.updaterUrl || !this.config.updaterToken)
+    if (!this.config.updaterUrl || this.config.updaterToken.length < 32)
       throw new AppError(
         "UPDATER_NOT_CONFIGURED",
         "在线升级服务尚未配置，请先按 README 完成升级器初始化",

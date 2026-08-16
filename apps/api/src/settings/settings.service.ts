@@ -36,8 +36,9 @@ export class SettingsService {
       ...DEFAULTS,
       ...Object.fromEntries(rows.map((item) => [item.key, item.value])),
     };
-    const microsoft = await this.prisma.microsoftAppConfig.findUnique({
-      where: { id: "singleton" },
+    const microsoft = await this.prisma.microsoftAppConfig.findFirst({
+      where: { secretExpiresAt: { not: null } },
+      orderBy: { secretExpiresAt: "asc" },
     });
     return {
       ...values,

@@ -223,46 +223,59 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async checkSecretExpiry(): Promise<void> {
-    const app = await this.prisma.microsoftAppConfig.findUnique({
-      where: { id: "singleton" },
-    });
-    if (!app?.secretExpiresAt) {
-      for (const threshold of [30, 7, 1])
-        await this.alerts.resolve(`microsoft-secret:${threshold}`);
-      await this.alerts.resolve("microsoft-secret:expired");
-      return;
-    }
-    const remainingMs = app.secretExpiresAt.getTime() - Date.now();
-    const days = Math.ceil(remainingMs / 86_400_000);
-    if (remainingMs <= 0) {
-      await this.alerts.open({
-        fingerprint: "microsoft-secret:expired",
-        type: "CLIENT_SECRET_EXPIRED",
-        severity: "CRITICAL",
-        title: "Microsoft Client Secret 已到期",
-        message:
-          "请立即在 Microsoft Entra 应用注册中创建新 Secret，并在系统设置中替换。",
-        metadata: { expiresAt: app.secretExpiresAt.toISOString(), days },
-      });
-      for (const threshold of [30, 7, 1])
-        await this.alerts.resolve(`microsoft-secret:${threshold}`);
-      return;
-    }
+    const apps = await this.prisma.microsoftAppConfig.findMany();
+    for (const threshold of [30, 7, 1])
+      await this.alerts.resolve(`microsoft-secret:${threshold}`);
     await this.alerts.resolve("microsoft-secret:expired");
-    const thresholds = [30, 7, 1];
-    for (const threshold of thresholds) {
-      const fingerprint = `microsoft-secret:${threshold}`;
-      if (days <= threshold && days >= 0) {
+    for (const app of apps) {
+      const prefix = `microsoft-secret:${app.id}`;
+      if (!app.secretExpiresAt) {
+        for (const threshold of [30, 7, 1])
+          await this.alerts.resolve(`${prefix}:${threshold}`);
+        await this.alerts.resolve(`${prefix}:expired`);
+        continue;
+      }
+      const remainingMs = app.secretExpiresAt.getTime() - Date.now();
+      const days = Math.ceil(remainingMs / 86_400_000);
+      if (remainingMs <= 0) {
         await this.alerts.open({
-          fingerprint,
-          type: "CLIENT_SECRET_EXPIRING",
-          severity: days <= 1 ? "CRITICAL" : "WARNING",
-          title: `Microsoft Client Secret 将在 ${days} 天内到期`,
+          fingerprint: `${prefix}:expired`,
+          type: "CLIENT_SECRET_EXPIRED",
+          severity: "CRITICAL",
+          title: `${app.name} 的 Client Secret 已到期`,
           message:
-            "请在 Microsoft Entra 应用注册中创建新 Secret，并在系统设置中替换。",
-          metadata: { expiresAt: app.secretExpiresAt.toISOString(), days },
+            "请立即在 Microsoft Entra 应用注册中创建新 Secret，并在对应应用配置中替换。",
+          metadata: {
+            appConfigId: app.id,
+            appName: app.name,
+            expiresAt: app.secretExpiresAt.toISOString(),
+            days,
+          },
         });
-      } else await this.alerts.resolve(fingerprint);
+        for (const threshold of [30, 7, 1])
+          await this.alerts.resolve(`${prefix}:${threshold}`);
+        continue;
+      }
+      await this.alerts.resolve(`${prefix}:expired`);
+      for (const threshold of [30, 7, 1]) {
+        const fingerprint = `${prefix}:${threshold}`;
+        if (days <= threshold) {
+          await this.alerts.open({
+            fingerprint,
+            type: "CLIENT_SECRET_EXPIRING",
+            severity: days <= 1 ? "CRITICAL" : "WARNING",
+            title: `${app.name} 的 Client Secret 将在 ${days} 天内到期`,
+            message:
+              "请在 Microsoft Entra 应用注册中创建新 Secret，并在对应应用配置中替换。",
+            metadata: {
+              appConfigId: app.id,
+              appName: app.name,
+              expiresAt: app.secretExpiresAt.toISOString(),
+              days,
+            },
+          });
+        } else await this.alerts.resolve(fingerprint);
+      }
     }
   }
 

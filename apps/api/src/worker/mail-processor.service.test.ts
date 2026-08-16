@@ -254,6 +254,44 @@ describe("MailProcessorService", () => {
     );
   });
 
+  it("does not report SENT until the provider supplies an actual sent timestamp", async () => {
+    const { service, prisma, transport } = fixture([baseReceipt], async () => ({
+      subject: "Re: Order question",
+      html: "<p>Received</p>",
+      text: "Received",
+      assets: [],
+    }));
+    prisma.replyAttempt.findUnique.mockResolvedValue({
+      id: "attempt-1",
+      receiptId: baseReceipt.id,
+      state: "SENDING",
+      draftMessageId: "draft-1",
+      sentAcceptedAt: new Date("2026-08-14T10:00:02.000Z"),
+      startedAt: new Date("2026-08-14T10:00:01.000Z"),
+      uploadedAssetIds: [],
+    });
+    transport.getMessage.mockResolvedValue({
+      id: "draft-1",
+      isDraft: false,
+      sentDateTime: undefined,
+    });
+
+    await service.verify(baseReceipt.id, "attempt-1", 0, "SEND");
+
+    expect(prisma.messageReceipt.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: "SENT" }),
+      }),
+    );
+    expect(prisma.transactionalOutbox.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          payload: expect.objectContaining({ phase: "SEND", stage: 1 }),
+        }),
+      }),
+    );
+  });
+
   it("preserves a send verification until the mailbox is reauthorized", async () => {
     const { service, prisma, transport } = fixture([baseReceipt], async () => ({
       subject: "Re: Order question",

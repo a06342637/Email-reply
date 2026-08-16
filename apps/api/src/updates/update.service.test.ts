@@ -3,11 +3,13 @@ import { UpdateService } from "./update.service.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
+const testUpdaterToken = `internal-token-${"x".repeat(32)}`;
+
 function configuredService() {
   return new UpdateService({
     version: "0.06",
     updaterUrl: "http://updater:3001",
-    updaterToken: "internal-token",
+    updaterToken: testUpdaterToken,
   } as never);
 }
 
@@ -38,13 +40,30 @@ describe("UpdateService", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
-          authorization: "Bearer internal-token",
+          authorization: `Bearer ${testUpdaterToken}`,
         }),
       }),
     );
   });
 
-  it("maps updater conflicts without exposing the backup passphrase", async () => {
+  it("derives legacy updater fields internally without requesting them from the browser", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ accepted: true }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await configuredService().apply({ targetVersion: "0.07" });
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(request.body)) as Record<string, string>;
+    expect(body.targetVersion).toBe("0.07");
+    expect(body.backupPassphrase).toHaveLength(43);
+    expect(body.confirmation).toBe("UPGRADE");
+    expect(body.backupPassphrase).not.toContain(testUpdaterToken);
+  });
+
+  it("maps updater conflicts from click-to-upgrade requests", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -57,11 +76,7 @@ describe("UpdateService", () => {
       ),
     );
     await expect(
-      configuredService().apply({
-        targetVersion: "0.07",
-        backupPassphrase: "do-not-log-this-password",
-        confirmation: "UPGRADE",
-      }),
+      configuredService().apply({ targetVersion: "0.07" }),
     ).rejects.toMatchObject({ code: "UPDATE_BUSY", status: 409 });
   });
 });

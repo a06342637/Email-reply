@@ -25,32 +25,72 @@ export class GoogleService {
   ) {}
 
   async getConfig() {
-    const app = await this.prisma.googleAppConfig.findUnique({
-      where: { id: "singleton" },
-    });
-    const publicUrl = await this.publicUrl();
+    const [apps, publicUrl] = await Promise.all([
+      this.prisma.googleAppConfig.findMany({
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        include: {
+          _count: {
+            select: {
+              mailboxes: { where: { status: { not: "REMOVED" } } },
+            },
+          },
+        },
+      }),
+      this.publicUrl(),
+    ]);
+    const first = apps[0];
     return {
-      configured: Boolean(app),
-      clientId: app?.clientId ?? "",
-      hasClientSecret: Boolean(app?.clientSecretEncrypted),
+      configured: apps.length > 0,
+      apps: apps.map((app) => this.appView(app)),
+      clientId: first?.clientId ?? "",
+      hasClientSecret: Boolean(first?.clientSecretEncrypted),
       publicUrl,
       callbackUrl: `${publicUrl || "https://your-domain.example"}/api/v1/google/oauth/callback`,
       scopes: GOOGLE_OAUTH_SCOPES,
     };
   }
 
-  async saveConfig(input: { clientId: string; clientSecret?: string }) {
-    const clientId = input.clientId.trim();
-    const existing = await this.prisma.googleAppConfig.findUnique({
-      where: { id: "singleton" },
-    });
-    if (!existing && !input.clientSecret)
+  async createApp(input: {
+    name: string;
+    clientId: string;
+    clientSecret?: string;
+  }) {
+    if (!input.clientSecret)
       throw new AppError(
         "CLIENT_SECRET_REQUIRED",
-        "首次配置必须填写 Google Client Secret",
+        "新增 Google 应用必须填写 Client Secret",
         400,
       );
-    if (existing && existing.clientId !== clientId && !input.clientSecret)
+    const row = await this.prisma.googleAppConfig.create({
+      data: {
+        name: this.appName(input.name),
+        clientId: input.clientId.trim(),
+        clientSecretEncrypted: await this.crypto.encryptString(
+          input.clientSecret,
+          "google-client-secret",
+        ),
+      },
+      include: { _count: { select: { mailboxes: true } } },
+    });
+    return this.appView(row);
+  }
+
+  async updateApp(
+    id: string,
+    input: { name: string; clientId: string; clientSecret?: string },
+  ) {
+    const existing = await this.prisma.googleAppConfig.findUnique({
+      where: { id },
+    });
+    if (!existing)
+      throw new AppError(
+        "GOOGLE_APP_NOT_FOUND",
+        "Google 应用不存在或已删除",
+        404,
+      );
+    const clientId = input.clientId.trim();
+    const clientChanged = existing.clientId !== clientId;
+    if (clientChanged && !input.clientSecret)
       throw new AppError(
         "CLIENT_SECRET_REQUIRED",
         "更换 Google Client ID 时必须同时填写对应的 Client Secret",
@@ -61,32 +101,28 @@ export class GoogleService {
           input.clientSecret,
           "google-client-secret",
         )
-      : existing!.clientSecretEncrypted;
-    const clientChanged = Boolean(existing && existing.clientId !== clientId);
-    const write = {
-      where: { id: "singleton" },
-      create: {
-        id: "singleton",
-        clientId,
-        clientSecretEncrypted: encrypted,
-      },
-      update: { clientId, clientSecretEncrypted: encrypted },
+      : existing.clientSecretEncrypted;
+    const data = {
+      name: this.appName(input.name),
+      clientId,
+      clientSecretEncrypted: encrypted,
     };
     const saved = clientChanged
       ? await this.prisma.$transaction(async (tx) => {
-          const row = await tx.googleAppConfig.upsert(write);
+          const row = await tx.googleAppConfig.update({ where: { id }, data });
           await tx.mailbox.updateMany({
-            where: { provider: "GOOGLE", status: { not: "REMOVED" } },
+            where: { googleAppConfigId: id, status: { not: "REMOVED" } },
             data: {
               status: "AUTH_REQUIRED",
               lastErrorCode: "CLIENT_ID_CHANGED",
-              lastErrorMessage: "Google Client ID 已更改，需要重新授权邮箱",
+              lastErrorMessage:
+                "所选 Google 应用的 Client ID 已更改，需要重新授权邮箱",
             },
           });
           await tx.autoReplyTask.updateMany({
             where: {
               status: { in: ["RUNNING", "INITIALIZING"] },
-              mailbox: { provider: "GOOGLE" },
+              mailbox: { googleAppConfigId: id },
             },
             data: { status: "PAUSED", pausedAt: new Date(), nextPollAt: null },
           });
@@ -95,16 +131,15 @@ export class GoogleService {
             USING "MessageReceipt" AS receipt, "Mailbox" AS mailbox
             WHERE outbox."aggregateId" = receipt."id"
               AND receipt."mailboxId" = mailbox."id"
-              AND mailbox."provider" = 'GOOGLE'::"MailProvider"
+              AND mailbox."googleAppConfigId" = ${id}
               AND outbox."kind" IN ('PROCESS_MESSAGE', 'VERIFY_SEND')
           `;
           return row;
         })
-      : await this.prisma.googleAppConfig.upsert(write);
-
+      : await this.prisma.googleAppConfig.update({ where: { id }, data });
     if (clientChanged) {
       const affected = await this.prisma.mailbox.findMany({
-        where: { provider: "GOOGLE", status: "AUTH_REQUIRED" },
+        where: { googleAppConfigId: id, status: "AUTH_REQUIRED" },
         select: { id: true },
       });
       for (const mailbox of affected)
@@ -114,15 +149,22 @@ export class GoogleService {
           severity: "CRITICAL",
           title: "邮箱需要重新授权",
           message: "Google Client ID 已更改，自动回复已暂停。",
-          metadata: { mailboxId: mailbox.id, code: "CLIENT_ID_CHANGED" },
+          metadata: {
+            mailboxId: mailbox.id,
+            appConfigId: id,
+            code: "CLIENT_ID_CHANGED",
+          },
         });
     }
-
     let refreshAttempted = 0;
     let refreshFailed = 0;
-    if (existing && input.clientSecret && !clientChanged) {
+    if (input.clientSecret && !clientChanged) {
       const mailboxes = await this.prisma.mailbox.findMany({
-        where: { provider: "GOOGLE", status: "CONNECTED" },
+        where: {
+          googleAppConfigId: id,
+          provider: "GOOGLE",
+          status: "CONNECTED",
+        },
         select: { id: true },
       });
       refreshAttempted = mailboxes.length;
@@ -135,14 +177,59 @@ export class GoogleService {
       }
     }
     return {
-      clientId: saved.clientId,
+      ...this.appView(saved),
       clientChanged,
       refreshAttempted,
       refreshFailed,
     };
   }
 
+  async deleteApp(id: string): Promise<{ name: string }> {
+    const app = await this.prisma.googleAppConfig.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: {
+            mailboxes: { where: { status: { not: "REMOVED" } } },
+          },
+        },
+      },
+    });
+    if (!app)
+      throw new AppError(
+        "GOOGLE_APP_NOT_FOUND",
+        "Google 应用不存在或已删除",
+        404,
+      );
+    if (app._count.mailboxes)
+      throw new AppError(
+        "GOOGLE_APP_IN_USE",
+        "仍有邮箱使用此 Google 应用，请先移除邮箱或改用其他应用重新授权",
+        409,
+        { mailboxes: app._count.mailboxes },
+      );
+    await this.prisma.$transaction([
+      this.prisma.mailbox.updateMany({
+        where: { googleAppConfigId: id, status: "REMOVED" },
+        data: { googleAppConfigId: null },
+      }),
+      this.prisma.oAuthState.deleteMany({ where: { googleAppConfigId: id } }),
+      this.prisma.googleAppConfig.delete({ where: { id } }),
+    ]);
+    return { name: app.name };
+  }
+
+  async saveConfig(input: { clientId: string; clientSecret?: string }) {
+    const existing = await this.prisma.googleAppConfig.findFirst({
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    return existing
+      ? this.updateApp(existing.id, { ...input, name: existing.name })
+      : this.createApp({ ...input, name: "默认 Google / Gmail 应用" });
+  }
+
   async startOAuth(
+    appConfigId: string,
     redirectAfter = "/mailboxes",
   ): Promise<{ authorizationUrl: string }> {
     const publicUrl = await this.publicUrl();
@@ -153,13 +240,13 @@ export class GoogleService {
         409,
       );
     const app = await this.prisma.googleAppConfig.findUnique({
-      where: { id: "singleton" },
+      where: { id: appConfigId },
     });
     if (!app)
       throw new AppError(
-        "GOOGLE_NOT_CONFIGURED",
-        "请先配置 Google Client ID 和 Client Secret",
-        409,
+        "GOOGLE_APP_NOT_FOUND",
+        "所选 Google 应用不存在，请重新选择",
+        404,
       );
     const rawState = this.crypto.randomToken(32);
     const verifier = this.crypto.randomToken(64);
@@ -169,6 +256,8 @@ export class GoogleService {
       data: {
         id,
         provider: "GOOGLE",
+        microsoftAppConfigId: null,
+        googleAppConfigId: app.id,
         stateHash: this.crypto.hmac(rawState),
         verifierEncrypted: await this.crypto.encryptString(
           verifier,
@@ -241,10 +330,20 @@ export class GoogleService {
       state.verifierEncrypted,
       `oauth:${id}`,
     );
+    const app = await this.prisma.googleAppConfig.findUnique({
+      where: { id: state.googleAppConfigId || "singleton" },
+    });
+    if (!app)
+      throw new AppError(
+        "GOOGLE_APP_NOT_FOUND",
+        "授权使用的 Google 应用已被删除，请重新连接",
+        409,
+      );
     const token = await this.gmail.exchangeAuthorizationCode(
       code,
       verifier,
       `${publicUrl}/api/v1/google/oauth/callback`,
+      app.id,
     );
     const [profile, user] = await Promise.all([
       this.gmail.gmailProfile(token.accessToken!),
@@ -295,6 +394,8 @@ export class GoogleService {
         id: mailboxId,
         email,
         provider: "GOOGLE",
+        microsoftAppConfigId: null,
+        googleAppConfigId: app.id,
         displayName: user.name || email,
         tenantId: null,
         accountType,
@@ -307,6 +408,8 @@ export class GoogleService {
         provider: "GOOGLE",
         microsoftAuthMode: "MSAL_OAUTH",
         microsoftClientId: null,
+        microsoftAppConfigId: null,
+        googleAppConfigId: app.id,
         displayName: user.name || email,
         tenantId: null,
         accountType,
@@ -325,6 +428,37 @@ export class GoogleService {
     return {
       redirectTo: state.redirectAfter || "/mailboxes",
       mailboxId: mailbox.id,
+    };
+  }
+
+  private appName(value: string): string {
+    const name = value.trim();
+    if (!name)
+      throw new AppError(
+        "GOOGLE_APP_NAME_REQUIRED",
+        "Google 应用名称不能为空",
+        400,
+      );
+    return name;
+  }
+
+  private appView(app: {
+    id: string;
+    name: string;
+    clientId: string;
+    clientSecretEncrypted: string;
+    createdAt: Date;
+    updatedAt: Date;
+    _count?: { mailboxes: number };
+  }) {
+    return {
+      id: app.id,
+      name: app.name,
+      clientId: app.clientId,
+      hasClientSecret: Boolean(app.clientSecretEncrypted),
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+      mailboxCount: app._count?.mailboxes ?? 0,
     };
   }
 

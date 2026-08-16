@@ -11,6 +11,29 @@ if [[ ! -d .git ]]; then
   echo "在线或脚本升级需要完整的 Git 仓库。"
   exit 1
 fi
+
+OFFICIAL_REPOSITORY="https://github.com/a06342637/Email-reply"
+normalize_repository_url() {
+  local value=${1,,}
+  value=${value%/}
+  value=${value%.git}
+  value=${value%/}
+  if [[ "$value" == git@github.com:* ]]; then
+    value="https://github.com/${value#*:}"
+  fi
+  printf '%s' "$value"
+}
+
+ORIGIN_URL=$(git remote get-url origin 2>/dev/null || true)
+if [[ $(normalize_repository_url "$ORIGIN_URL") != $(normalize_repository_url "$OFFICIAL_REPOSITORY") ]]; then
+  echo "Git origin 不是允许的官方仓库，已拒绝升级：${ORIGIN_URL:-未配置}"
+  exit 1
+fi
+CURRENT_BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+if [[ "$CURRENT_BRANCH" != "main" ]]; then
+  echo "升级只能在 main 主分支执行；当前状态：${CURRENT_BRANCH:-detached HEAD}"
+  exit 1
+fi
 if [[ -n $(git status --porcelain --untracked-files=all) ]]; then
   echo "项目目录存在未提交改动。为防止覆盖文件，升级已停止。"
   exit 1

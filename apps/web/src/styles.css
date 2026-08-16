@@ -1402,6 +1402,79 @@ td small {
 .provider-setup-grid b {
   color: var(--text);
 }
+.provider-app-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 26px 0 12px;
+}
+.provider-app-heading h3,
+.provider-app-heading p {
+  margin: 0;
+}
+.provider-app-heading p {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.provider-app-list {
+  display: grid;
+  gap: 12px;
+}
+.provider-app-list > section {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: var(--surface-2);
+}
+.provider-app-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.provider-app-card-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.provider-app-card-head span,
+.provider-app-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+.provider-app-card-head .row-actions {
+  display: flex;
+  gap: 7px;
+}
+.provider-app-card-head button {
+  min-height: 34px;
+  padding: 0 10px;
+}
+.provider-app-list code {
+  display: block;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.provider-app-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 10px;
+}
+.provider-public-url {
+  align-items: end;
+  margin-top: 18px;
+}
+.provider-public-url button {
+  min-height: 43px;
+}
 .permission-help {
   margin-top: 10px;
 }
@@ -1935,6 +2008,17 @@ td small {
   }
   .provider-setup-grid {
     grid-template-columns: 1fr;
+  }
+  .provider-app-heading,
+  .provider-app-card-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .provider-app-card-head .row-actions {
+    width: 100%;
+  }
+  .provider-app-card-head .row-actions button {
+    flex: 1;
   }
   .auth-method-grid {
     grid-template-columns: 1fr;

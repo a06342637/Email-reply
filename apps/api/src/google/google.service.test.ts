@@ -2,6 +2,29 @@ import { describe, expect, it, vi } from "vitest";
 import { GoogleService } from "./google.service.js";
 
 describe("GoogleService", () => {
+  it("refuses to delete an application that still has a mailbox", async () => {
+    const service = new GoogleService(
+      {
+        googleAppConfig: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: "app-1",
+            name: "Primary",
+            _count: { mailboxes: 1 },
+          }),
+        },
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(service.deleteApp("app-1")).rejects.toMatchObject({
+      code: "GOOGLE_APP_IN_USE",
+      status: 409,
+    });
+  });
+
   it("creates a PKCE OAuth URL and provider-bound state", async () => {
     const prisma = {
       systemSetting: {
@@ -11,6 +34,7 @@ describe("GoogleService", () => {
       },
       googleAppConfig: {
         findUnique: vi.fn().mockResolvedValue({
+          id: "app-1",
           clientId: "client.apps.googleusercontent.com",
         }),
       },
@@ -32,7 +56,7 @@ describe("GoogleService", () => {
       {} as never,
     );
 
-    const result = await service.startOAuth("/mailboxes");
+    const result = await service.startOAuth("app-1", "/mailboxes");
     const url = new URL(result.authorizationUrl);
 
     expect(url.hostname).toBe("accounts.google.com");
@@ -41,7 +65,10 @@ describe("GoogleService", () => {
     expect(url.searchParams.get("scope")).toContain("gmail.readonly");
     expect(prisma.oAuthState.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ provider: "GOOGLE" }),
+        data: expect.objectContaining({
+          provider: "GOOGLE",
+          googleAppConfigId: "app-1",
+        }),
       }),
     );
   });
@@ -52,6 +79,7 @@ describe("GoogleService", () => {
       provider: "GOOGLE",
       stateHash: "hash",
       verifierEncrypted: "encrypted-verifier",
+      googleAppConfigId: "app-1",
       redirectAfter: "/mailboxes",
       expiresAt: new Date(Date.now() + 60_000),
     };
@@ -64,6 +92,9 @@ describe("GoogleService", () => {
       oAuthState: {
         findUnique: vi.fn().mockResolvedValue(state),
         delete: vi.fn().mockResolvedValue({}),
+      },
+      googleAppConfig: {
+        findUnique: vi.fn().mockResolvedValue({ id: "app-1" }),
       },
       mailbox: {
         findUnique: vi.fn().mockResolvedValue(null),
@@ -117,6 +148,7 @@ describe("GoogleService", () => {
       expect.objectContaining({
         create: expect.objectContaining({
           provider: "GOOGLE",
+          googleAppConfigId: "app-1",
           accountType: "GMAIL_PERSONAL",
           status: "CONNECTED",
         }),
@@ -130,6 +162,7 @@ describe("GoogleService", () => {
       provider: "GOOGLE",
       stateHash: "hash",
       verifierEncrypted: "encrypted-verifier",
+      googleAppConfigId: "app-1",
       redirectAfter: "/mailboxes",
       expiresAt: new Date(Date.now() + 60_000),
     };
@@ -142,6 +175,9 @@ describe("GoogleService", () => {
       oAuthState: {
         findUnique: vi.fn().mockResolvedValue(state),
         delete: vi.fn().mockResolvedValue({}),
+      },
+      googleAppConfig: {
+        findUnique: vi.fn().mockResolvedValue({ id: "app-1" }),
       },
       mailbox: {
         findUnique: vi.fn().mockResolvedValue({
@@ -188,6 +224,7 @@ describe("GoogleService", () => {
           provider: "GOOGLE",
           microsoftAuthMode: "MSAL_OAUTH",
           microsoftClientId: null,
+          googleAppConfigId: "app-1",
         }),
       }),
     );

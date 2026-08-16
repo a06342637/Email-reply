@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  Param,
   Patch,
   Post,
   Query,
@@ -11,6 +13,7 @@ import {
 import type { Request, Response } from "express";
 import { AuditService } from "../core/audit.js";
 import {
+  GoogleAppDto,
   GoogleConfigDto,
   GoogleOAuthStartDto,
   GooglePublicUrlDto,
@@ -39,6 +42,50 @@ export class GoogleController {
     return result;
   }
 
+  @Post("apps")
+  async createApp(@Body() body: GoogleAppDto, @Req() req: Request) {
+    const result = await this.google.createApp(body);
+    await this.audit.write(
+      "GOOGLE_APP_CREATED",
+      req,
+      { type: "GoogleAppConfig", id: result.id },
+      { name: result.name, clientId: result.clientId },
+    );
+    return result;
+  }
+
+  @Patch("apps/:id")
+  async updateApp(
+    @Param("id") id: string,
+    @Body() body: GoogleAppDto,
+    @Req() req: Request,
+  ) {
+    const result = await this.google.updateApp(id, body);
+    await this.audit.write(
+      "GOOGLE_APP_UPDATED",
+      req,
+      { type: "GoogleAppConfig", id },
+      {
+        name: result.name,
+        clientId: result.clientId,
+        secretReplaced: Boolean(body.clientSecret),
+      },
+    );
+    return result;
+  }
+
+  @Delete("apps/:id")
+  async deleteApp(@Param("id") id: string, @Req() req: Request) {
+    const result = await this.google.deleteApp(id);
+    await this.audit.write(
+      "GOOGLE_APP_DELETED",
+      req,
+      { type: "GoogleAppConfig", id },
+      result,
+    );
+    return { ok: true };
+  }
+
   @Patch("public-url")
   async publicUrl(@Body() body: GooglePublicUrlDto, @Req() req: Request) {
     await this.google.setPublicUrl(body.publicUrl);
@@ -50,8 +97,13 @@ export class GoogleController {
 
   @Post("oauth/start")
   async start(@Body() body: GoogleOAuthStartDto, @Req() req: Request) {
-    const result = await this.google.startOAuth(body.redirectAfter);
-    await this.audit.write("GOOGLE_OAUTH_STARTED", req);
+    const result = await this.google.startOAuth(
+      body.appConfigId,
+      body.redirectAfter,
+    );
+    await this.audit.write("GOOGLE_OAUTH_STARTED", req, undefined, {
+      appConfigId: body.appConfigId,
+    });
     return result;
   }
 

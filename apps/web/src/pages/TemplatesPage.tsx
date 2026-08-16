@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  Archive,
   Code2,
   Copy,
   Eye,
@@ -61,11 +60,25 @@ export function TemplatesPage() {
   useEffect(() => {
     void load();
   }, []);
-  async function archive(id: string) {
-    if (!confirm("归档后不可用于新任务，但历史修订和日志引用会保留。")) return;
-    await api(`/api/v1/templates/${id}`, json("DELETE"));
-    notify("模板已归档");
-    await load();
+  async function removeTemplate(template: Template) {
+    const references =
+      (template._count?.defaultForTasks ?? 0) + (template._count?.rules ?? 0);
+    const warning = references
+      ? `\n\n当前仍有 ${references} 个任务或规则引用，系统会拒绝删除，需先更换对应模板。`
+      : "";
+    if (
+      !confirm(
+        `确定永久删除模板“${template.name}”吗？模板内容、全部修订和附件都会删除，且无法恢复。${warning}`,
+      )
+    )
+      return;
+    try {
+      await api(`/api/v1/templates/${template.id}`, json("DELETE"));
+      notify("模板已永久删除");
+      await load();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "删除模板失败", "danger");
+    }
   }
   async function duplicate(id: string) {
     await api(`/api/v1/templates/${id}/duplicate`, json("POST"));
@@ -128,10 +141,10 @@ export function TemplatesPage() {
                     </button>
                     <button
                       className="danger-link"
-                      onClick={() => archive(t.id)}
+                      onClick={() => removeTemplate(t)}
                     >
-                      <Archive />
-                      归档
+                      <Trash2 />
+                      删除
                     </button>
                   </div>
                 </div>
@@ -543,7 +556,9 @@ function TestModal({
         `/api/v1/templates/${template.id}/test-send`,
         json("POST", { mailboxId, recipient }),
       );
-      alert("测试邮件已提交");
+      alert(
+        "邮件服务商已接受测试邮件；这不代表目标邮箱已经最终投递，请继续检查目标邮箱并留意延迟或拦截。",
+      );
       onClose();
     } finally {
       setBusy(false);

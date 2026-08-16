@@ -123,7 +123,6 @@ export class TemplateService {
 
   list() {
     return this.prisma.replyTemplate.findMany({
-      where: { archivedAt: null },
       include: {
         publishedRevision: {
           select: { id: true, version: true, publishedAt: true },
@@ -418,11 +417,53 @@ export class TemplateService {
     return { subject, html: this.sanitize(html), text };
   }
 
-  async archive(id: string): Promise<void> {
-    await this.prisma.replyTemplate.update({
+  async delete(id: string): Promise<{ revisionCount: number }> {
+    const template = await this.prisma.replyTemplate.findUnique({
       where: { id },
-      data: { archivedAt: new Date() },
+      select: {
+        id: true,
+        revisions: { select: { id: true } },
+        _count: { select: { defaultForTasks: true, rules: true } },
+      },
     });
+    if (!template)
+      throw new AppError("TEMPLATE_NOT_FOUND", "模板不存在或已删除", 404);
+    if (template._count.defaultForTasks || template._count.rules)
+      throw new AppError(
+        "TEMPLATE_IN_USE",
+        "模板仍被自动回复任务或规则使用，请先更换对应模板后再删除",
+        409,
+        {
+          tasks: template._count.defaultForTasks,
+          rules: template._count.rules,
+        },
+      );
+    const revisionIds = template.revisions.map((revision) => revision.id);
+    const processing = revisionIds.length
+      ? await this.prisma.messageReceipt.count({
+          where: {
+            templateRevisionId: { in: revisionIds },
+            state: {
+              in: [
+                "DISCOVERED",
+                "QUEUED",
+                "CREATING_DRAFT",
+                "DRAFT_READY",
+                "SENDING",
+              ],
+            },
+          },
+        })
+      : 0;
+    if (processing)
+      throw new AppError(
+        "TEMPLATE_PROCESSING",
+        "模板仍有正在处理或发送的邮件，请等待处理完成后再删除",
+        409,
+        { processing },
+      );
+    await this.prisma.replyTemplate.delete({ where: { id } });
+    return { revisionCount: revisionIds.length };
   }
 
   async duplicate(id: string) {

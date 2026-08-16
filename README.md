@@ -1,6 +1,6 @@
 # MailPilot — Microsoft 与 Gmail 邮箱自动回复系统
 
-当前版本：**v0.13**
+当前版本：**v0.16**
 
 [![CI](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml)
 
@@ -8,12 +8,12 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 
 系统不使用 IMAP/SMTP，不保存邮箱密码。收件、发件和 OAuth 都通过 HTTPS 访问 Microsoft 或 Google 官方 API，因此服务器无需开放 993、465 或 587 端口。
 
-> v0.13 修复 Microsoft Client ID + Refresh Token 导入可能因 Token Endpoint、`/me`、收件箱和垃圾箱验证超时叠加而被反向代理中断为 502 的问题。交互式导入的 Microsoft 外部验证现在具有 25 秒总预算、阶段化错误码、请求 ID 和安全诊断日志，并并行验证 Microsoft Graph 邮箱能力。正式投入使用前，仍应使用你自己的 Microsoft/Google 凭据和测试邮箱完成本文末尾的业务验收。
+> v0.16 支持保存多套 Microsoft Graph 与 Google Cloud / Gmail API 应用，并在连接每个邮箱时选择对应应用；发送状态也改为“服务商已接受”，避免把发件服务商接受误解成目标邮箱最终送达。正式投入使用前，仍应使用你自己的凭据和测试邮箱完成本文末尾的业务验收。
 
 ## 目录
 
 - [主要功能](#主要功能)
-- [v0.13 支持范围](#v013-支持范围)
+- [v0.16 支持范围](#v016-支持范围)
 - [系统架构](#系统架构)
 - [网络与服务器要求](#网络与服务器要求)
 - [Debian 一键安装](#debian-一键安装)
@@ -44,6 +44,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - Microsoft 支持 Outlook/Hotmail 个人邮箱和全球版 Microsoft 365 用户邮箱。
 - Google 支持 Gmail 个人邮箱和 Google Workspace 用户邮箱。
 - Microsoft 邮箱支持 OAuth 2.0 Authorization Code + PKCE 网页登录（推荐），也支持 Client ID + Refresh Token 高级导入。
+- Microsoft Graph 和 Google Cloud / Gmail API 均可保存多套应用配置；添加或重新授权邮箱时选择对应应用，凭据和影响范围彼此隔离。
 - 使用加密的 MSAL Token Cache、Microsoft Refresh Token Cache 或 Google Refresh Token 自动续期，不保存邮箱登录密码。
 - Microsoft 分别检测 inbox 与 junkemail；Gmail 分别识别 INBOX 与 SPAM。
 - 检测周期最低可设置为 3 秒；这是尽力而为周期，不是硬实时承诺。
@@ -62,7 +63,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - 系统设置内置在线升级：检查正式版本、升级前加密备份、实时进度、健康检查和失败自动回滚。
 - 提供 Debian 安装脚本、改密 CLI、健康检查和命令行升级回滚脚本。
 
-## v0.13 支持范围
+## v0.16 支持范围
 
 支持：
 
@@ -323,9 +324,9 @@ https://mail.example.com
 
 ## 注册 Microsoft Entra 应用
 
-本节用于推荐的 **OAuth 网页登录** 方式。只需要创建一套 Microsoft Web 应用，之后可用它连接 1–10 个邮箱。
+本节用于推荐的 **OAuth 网页登录** 方式。同一套 Microsoft Web 应用可以连接多个邮箱，也可以在 MailPilot 中保存多套应用，让不同邮箱使用不同的 Entra 应用注册。
 
-如果已经持有与某个 Microsoft 公共客户端匹配的 Client ID 和 Refresh Token，也可以跳到“连接邮箱”章节使用高级导入，不必把这套 Client ID/Secret 保存为系统级 OAuth 配置。
+如果已经持有与某个 Microsoft 公共客户端匹配的 Client ID 和 Refresh Token，也可以跳到“连接邮箱”章节使用高级导入：既可选择一套已保存应用来取得 Client ID，也可手工填写独立 Client ID；两种方式都不会使用保存的 Client Secret 换取该 Refresh Token。
 
 ### 1. 新建应用注册
 
@@ -423,22 +424,24 @@ MailPilot 使用的是 **Delegated permissions**，不是 Application permission
 
 **系统设置 → Microsoft**
 
-填写：
+点击“添加应用”，填写：
 
+- 便于后台识别的应用名称。
 - Client ID。
 - Client Secret Value。
 - Secret 到期日期。
-- HTTPS 公开地址。
+
+可以重复添加多套应用。随后单独填写并保存 HTTPS 公开地址；所有 Microsoft Web 应用使用同一个回调路径，但每套 Entra 应用都必须登记该回调地址。
 
 保存后 Client Secret 不会再次显示原文，只能替换。
 
-修改这里的 Client ID 只会使使用 **OAuth 网页登录** 的 Microsoft 邮箱进入需要重新授权状态；使用独立 Client ID + Refresh Token 导入的邮箱不受影响。仅替换同一应用的 Client Secret 时，系统会先尝试静默刷新 OAuth 邮箱。
+连接邮箱时会选择其中一套应用。修改某套应用的 Client ID 只会使绑定该应用的邮箱进入需要重新授权状态；使用其他应用或独立 Client ID 的邮箱不受影响。仅替换同一应用的 Client Secret 时，系统会先尝试静默刷新绑定邮箱。仍有邮箱使用的应用不能删除。
 
-Client ID + Refresh Token 高级导入不使用这里保存的 Client Secret，但 Refresh Token 必须由同一 Client ID 的合法委托授权签发，至少具有 `offline_access`、`User.Read`、`Mail.ReadWrite`、`Mail.Send`，且应用必须允许不提交 Client Secret 的公共客户端刷新。若应用属于必须提交 Secret 的 confidential client，请改用 OAuth 网页登录。
+Client ID + Refresh Token 高级导入可选择已保存应用或手工填写独立 Client ID，但不会使用这里保存的 Client Secret。Refresh Token 必须由同一 Client ID 的合法委托授权签发，至少具有 `offline_access`、`User.Read`、`Mail.ReadWrite`、`Mail.Send`，且应用必须允许不提交 Client Secret 的公共客户端刷新。若应用属于必须提交 Secret 的 confidential client，请改用 OAuth 网页登录。
 
 ## 注册 Google Cloud Gmail 应用
 
-只需要创建一套 Google OAuth Web 应用，之后可用它连接 Gmail 个人邮箱或 Google Workspace 用户邮箱。
+同一套 Google OAuth Web 应用可以连接多个 Gmail 或 Google Workspace 邮箱，也可以在 MailPilot 中保存多个 Google Cloud 项目的 OAuth Client，让不同邮箱使用不同应用。
 
 ### 1. 创建或选择 Google Cloud 项目
 
@@ -519,13 +522,15 @@ https://mail.example.com/api/v1/google/oauth/callback
 
 **系统设置 → Google / Gmail**
 
-填写：
+点击“添加应用”，填写：
 
+- 便于后台识别的应用名称。
 - OAuth Client ID，通常以 `.apps.googleusercontent.com` 结尾。
 - Client Secret。
-- HTTPS 公开地址。
 
-保存后 Client Secret 不再显示原文，只能替换。修改 Client ID 会暂停现有 Gmail 任务并要求重新授权；只替换同一客户端的 Secret 时，系统会先尝试刷新已有邮箱。
+可以重复添加多套应用。随后单独填写并保存 HTTPS 公开地址；每套 Google Web OAuth Client 都必须登记同一个 Google 回调地址。
+
+保存后 Client Secret 不再显示原文，只能替换。连接 Gmail 时选择要使用的应用。修改某套应用的 Client ID 只会暂停绑定该应用的 Gmail 任务并要求重新授权；只替换同一客户端的 Secret 时，系统会先尝试刷新绑定邮箱。仍有邮箱使用的应用不能删除。
 
 ## 首次登录
 
@@ -554,7 +559,7 @@ docker compose logs app
 
 ## 连接邮箱
 
-Gmail 和 Microsoft OAuth 网页登录需要先配置 HTTPS 公开地址及对应的 Client ID/Secret。Microsoft Client ID + Refresh Token 导入不依赖回调地址，也不使用系统级 Microsoft Client Secret。
+Gmail 和 Microsoft OAuth 网页登录需要先配置 HTTPS 公开地址，并至少保存一套对应的应用。Microsoft Client ID + Refresh Token 导入不依赖回调地址，也不使用 Microsoft Client Secret。
 
 ### 连接 Microsoft 邮箱
 
@@ -569,6 +574,8 @@ Gmail 和 Microsoft OAuth 网页登录需要先配置 HTTPS 公开地址及对�
 选择：
 
 **OAuth 网页登录 → 使用 OAuth 登录**
+
+先在下拉框选择要使用的 Microsoft Graph 应用。授权 state 会锁定这套应用，回调后邮箱也会与该应用关联。
 
 随后：
 
@@ -595,7 +602,8 @@ POST /api/v1/microsoft/import-refresh-token
 
 填写：
 
-- **Client ID**：签发该 Refresh Token 的 Microsoft Application (client) ID。
+- **Microsoft 应用**：可选择已保存应用，或选择“手工填写独立 Client ID”。
+- **Client ID**：手工模式下填写签发该 Refresh Token 的 Microsoft Application (client) ID。
 - **Refresh Token**：该应用通过合法委托授权流程取得的 Refresh Token。
 
 点击“验证并导入”后，系统按以下顺序处理：
@@ -617,7 +625,7 @@ POST /api/v1/microsoft/import-refresh-token
 - 不要从不可信第三方购买、复制或共享 Refresh Token。Refresh Token 等同于长期邮箱授权，泄露后应立即在 Microsoft 账户或 Entra 中撤销应用许可。
 - 系统不能在不实际发信的情况下无副作用验证 `Mail.Send`，因此导入阶段验证令牌的 `Mail.Send` 委托权限；上线前仍应使用“模板测试发送”完成真实发件验收。
 
-两种方法都不保存 Microsoft 邮箱密码，并且后续读取和发送统一通过 Microsoft Graph。手工导入邮箱不依赖“系统设置 → Microsoft”中的 Client Secret；更换系统级 Client ID 也不会暂停它。
+两种方法都不保存 Microsoft 邮箱密码，并且后续读取和发送统一通过 Microsoft Graph。Refresh Token 导入不使用 Client Secret；使用独立 Client ID 时不绑定任何已保存应用，使用已保存应用时则仅关联其 Client ID，便于后台识别和后续选择。
 
 同一个邮箱地址同一时间只能绑定一个活动提供商，避免混合授权缓存、会话游标和历史去重记录。若已执行“移除邮箱”，之后可以把同一地址重新连接到另一个提供商；系统会使用全新游标基线，不补回复移除期间的旧任务邮件。
 
@@ -626,6 +634,8 @@ POST /api/v1/microsoft/import-refresh-token
 进入：
 
 **邮箱账号 → 连接 Gmail**
+
+先从下拉框选择要使用的 Google / Gmail 应用，再前往 Google 登录。
 
 随后：
 
@@ -647,6 +657,7 @@ POST /api/v1/microsoft/import-refresh-token
 - 邮箱地址和显示名称。
 - 账户类型。
 - 邮件提供商；Microsoft 邮箱还会显示租户 ID。
+- 邮箱当前绑定的 Microsoft Graph 或 Google / Gmail 应用名称；独立 Microsoft Client ID 会单独标识。
 - Token 最后刷新时间。
 - Microsoft 收件箱/垃圾箱 Delta 游标，或 Gmail History 游标状态。
 
@@ -734,7 +745,9 @@ POST /api/v1/microsoft/import-refresh-token
 - 发布后，新发现的邮件使用新版本。
 - 邮件入队时会锁定模板修订 ID。
 - 已排队邮件不会因后续编辑而改变内容。
-- 被任务或历史日志引用的版本只会归档，不会直接物理删除。
+- 模板中心只提供永久删除，不再提供归档。
+- 删除会同时移除模板修订和附件；仍被任务、规则或正在处理的邮件使用时，系统会拒绝删除。
+- 已完成邮件的处理日志保留模板名称快照，即使模板后来被删除仍可审计。
 
 “测试发送”会：
 
@@ -892,11 +905,13 @@ POST /api/v1/microsoft/import-refresh-token
 
 发送超时不会直接重发。系统会在 15 秒、60 秒和 5 分钟阶段查询草稿和已发送邮件：
 
-- 确认已发送：状态变为 SENT。
+- Microsoft 必须同时确认 `isDraft=false` 且存在 `sentDateTime`；Gmail 必须确认草稿已进入已发送状态，之后状态才变为 SENT。
 - 确认未发送：状态变为 FAILED_CONFIRMED，可手工重试。
 - 无法确认：状态变为 UNCERTAIN，并产生告警。
 
 UNCERTAIN 记录禁止直接强制重发，应先人工检查对应邮箱的草稿和已发送邮件。
+
+后台将 SENT 显示为“服务商已接受”。它表示 Microsoft Graph 或 Gmail API 已确认邮件进入发件邮箱的已发送目录，只能证明发件服务商接受了发送，**不等于目标邮箱最终收到**。目标提供商仍可能延迟、拒收、静默过滤、按规则归档或因邮件内容与发件信誉拦截；Microsoft Graph 和 Gmail API 不提供跨服务商的最终投递回执。
 
 ## 日志、告警和 Webhook
 
@@ -921,6 +936,7 @@ UNCERTAIN 记录禁止直接强制重发，应先人工检查对应邮箱的草�
 - 跳过原因。
 - 错误码。
 - Microsoft 请求 ID。
+- 服务商接受发送的说明；不会把该状态描述成目标邮箱已送达。
 
 不会保存：
 
@@ -1049,7 +1065,7 @@ docker compose exec app autoreply admin reset-password --disable-totp
 
 备份包含：
 
-- Microsoft 与 Google OAuth 应用配置。
+- 全部 Microsoft 与 Google OAuth 应用配置及邮箱关联。
 - 可迁移的 Microsoft MSAL Token Cache、Microsoft Client ID + Refresh Token 加密缓存与 Google OAuth Token Cache。
 - 邮箱、任务、游标和规则。
 - 模板、模板版本和附件。
@@ -1178,11 +1194,10 @@ docker compose start
 1. 点击“检查更新”。
 2. 系统从固定 GitHub 官方仓库拉取标签，只识别 `v0.07` 这类正式版本标签。
 3. 核对最新版本、更新内容和升级锁定原因。
-4. 点击“安全升级”，输入并确认至少 12 位升级前备份口令。
-5. 输入 `UPGRADE` 二次确认。
-6. 页面会显示备份、构建、停服、迁移、启动和健康检查进度。
-7. app 重启期间页面可能短暂连接失败；升级器是独立容器，任务不会因此中断，页面会自动重新连接。
-8. 新版本通过 `/health/ready` 后才会标记成功；失败时自动恢复旧代码和 app/worker 镜像。
+4. 点击“立即升级”，系统直接开始执行，无需输入备份口令或确认文字。
+5. 页面会显示备份、构建、停服、迁移、启动和健康检查进度。
+6. app 重启期间页面可能短暂连接失败；升级器是独立容器，任务不会因此中断，页面会自动重新连接。
+7. 新版本通过 `/health/ready` 后才会标记成功；成功后管理后台自动刷新，失败时自动恢复旧代码和 app/worker 镜像。
 
 在线升级会拒绝以下情况：
 
@@ -1195,7 +1210,15 @@ docker compose start
 - 目标版本低于或等于当前版本。
 - app 与 worker 当前使用不同镜像。
 
-升级前加密备份保存在项目的 `backups/` 目录，默认权限为 `0600`。备份口令只在升级任务内存中使用，不写入数据库、状态文件、审计日志或 Docker 日志。请把备份复制到服务器之外的安全位置。
+升级前加密备份保存在项目的 `backups/` 目录，默认权限为 `0600`。备份使用升级器内部密钥派生的专用口令，口令不进入浏览器请求、数据库、状态文件、审计日志或 Docker 日志。请把备份和服务器 `.env` 分别复制到安全位置。
+
+需要恢复后台在线升级生成的备份时，服务器 root 可查看对应恢复口令：
+
+```bash
+docker compose exec app autoreply backup show-update-passphrase
+```
+
+该命令会把敏感口令显示在当前终端，不要截图、转发或写入日志。更换 `UPDATER_TOKEN` 或丢失原服务器 `.env` 后，将无法重新派生旧升级备份的恢复口令。
 
 从 v0.06 或更旧版本升级时，旧后台还没有在线升级入口，需要先在项目目录执行一次命令行升级。升级到 v0.07 后，后续版本即可直接在后台操作。
 
@@ -1319,6 +1342,13 @@ docker compose exec app autoreply doctor
 ```
 
 后台处理日志会记录明确跳过原因。
+
+如果处理日志显示“服务商已接受”，但目标邮箱的收件箱和垃圾箱都没有邮件：
+
+- 先到发件邮箱的“已发送邮件”确认收件地址和内容；若邮件已存在，MailPilot 的发送链路已经完成。
+- 等待一段时间并检查目标邮箱过滤器、已归档、全部邮件、隔离区和管理员邮件追踪；不同提供商之间没有可靠的实时最终送达回执。
+- 使用只有一两行纯文本、没有图片和外链的模板再次测试。大量跳转链接、营销文案、新发件账号或低信誉内容更容易被 Gmail 等提供商静默拦截。
+- 检查发件邮箱是否收到延迟退信或投递失败通知。没有退信也不能证明目标提供商一定投递。
 
 ### 7. 垃圾箱邮件没有检测
 
@@ -1465,18 +1495,20 @@ http://127.0.0.1:4174
 
 仓库内置 GitHub Actions，会在 Linux/Node.js 22 上重复静态检查，并构建、启动完整 Docker Compose 栈，验证迁移、关键数据库索引、PostgreSQL、Redis、app、worker、健康接口、维护任务和运维 CLI。
 
-当前包含 27 个后端测试文件、117 项自动化测试，覆盖：
+当前包含 27 个后端测试文件、133 项后端自动化测试，以及 3 个前端测试文件、7 项前端自动化测试，覆盖：
 
 - Graph Token 临时故障和授权失效区分。
 - Microsoft Client ID + Refresh Token 导入、25 秒外部验证预算、有限重试、并行 Graph 验证、阶段化错误映射、安全诊断日志、权限校验、Token 轮换、撤销授权、401 强制刷新、并发凭据替换保护和无关 403 隔离。
 - 更换 Microsoft Client ID 时配置、停用与队列清理的事务一致性。
+- 多套 Microsoft/Google 应用的 OAuth 绑定、邮箱选择、删除保护、Secret 到期告警和旧 singleton 自动迁移。
 - Google PKCE OAuth、Refresh Token 刷新、撤销授权、提供商绑定状态和已移除邮箱的跨提供商重连。
 - Gmail History 基线、SPAM 映射、MIME 草稿、附件与无盲重试发送。
-- v0.01 备份向后兼容和 Gmail 游标关联完整性。
+- v0.01/旧单应用备份向后兼容、多应用引用完整性、独立 Client ID 恢复和 Gmail 游标关联完整性。
 - MIME 循环抑制、追踪头和非 ASCII Subject 编码。
 - 已发送邮件跨页追踪查询。
+- Microsoft Graph 缺少 `sentDateTime` 时禁止提前标记 SENT。
 - PostgreSQL Outbox 防丢恢复。
-- 安全过滤和规则匹配。
+- 安全过滤、实际阅读回执识别、阅读回执请求邮件放行和规则匹配。
 - From/Reply-To 分离和 Microsoft 服务邮件防绕过。
 - HTML 清洗、Liquid 转义和外部文件引用禁用。
 - 模板渲染失败、附件上传中断、授权中断和发送核验恢复。
@@ -1485,7 +1517,10 @@ http://127.0.0.1:4174
 - Delta 分页中断时只使用最后完整游标回退，避免漏掉更早邮件。
 - 任务在 Worker 领取邮件后的暂停竞态与恢复排队。
 - Webhook 多端点独立持久投递、投递租约和失败隔离。
-- 登录失败原子计数与 TOTP 恢复码一次性消费。
+- 登录失败原子计数、TOTP 恢复码一次性消费，以及后台会话过期后的统一重新登录。
+- 命令行升级的官方远程仓库和 main 分支保护。
+- 后台一键升级请求、系统派生备份口令和升级成功自动刷新状态。
+- 模板永久删除、任务和规则引用保护，以及处理中邮件保护。
 - 临时管理员凭据清理。
 - 生产镜像依赖裁剪与 Nest 运行依赖解析。
 
@@ -1500,8 +1535,8 @@ http://127.0.0.1:4174
 包括：
 
 - auth：登录、注销、改密、TOTP 和主题。
-- microsoft：系统级 Client 配置、OAuth 网页登录和 Client ID + Refresh Token 导入。
-- google：Google Cloud Client 配置和 Gmail OAuth。
+- microsoft：多应用配置、OAuth 网页登录和 Client ID + Refresh Token 导入。
+- google：多套 Google Cloud Client 配置和 Gmail OAuth。
 - mailboxes：邮箱连接状态和移除。
 - tasks：任务、暂停、恢复和规则。
 - templates：模板、发布、附件和测试发送。
@@ -1633,6 +1668,9 @@ v0.10
 v0.11
 v0.12
 v0.13
+v0.14
+v0.15
+v0.16
 ...
 ```
 

@@ -20,6 +20,7 @@ import { basename, isAbsolute, join } from "node:path";
 import {
   compareReleaseVersions,
   composeVersionEnvironment,
+  deriveUpdateBackupPassphrase,
   latestReleaseTag,
   normalizeRepositoryUrl,
   releaseVersionFromTag,
@@ -745,10 +746,7 @@ async function rollback(
   }
 }
 
-async function applyUpdate(
-  targetVersion: string,
-  backupPassphrase: string,
-): Promise<void> {
+async function applyUpdate(targetVersion: string): Promise<void> {
   let oldCommit = "";
   let oldVersion = readCurrentVersion();
   let rollbackImage: string | null = null;
@@ -806,7 +804,9 @@ async function applyUpdate(
       },
       "创建升级前加密备份",
     );
-    const backupPath = await createEncryptedBackup(backupPassphrase);
+    const backupPath = await createEncryptedBackup(
+      deriveUpdateBackupPassphrase(token),
+    );
     updateState(
       { backupFile: basename(backupPath), progress: 18 },
       `备份已生成：${basename(backupPath)}`,
@@ -987,21 +987,10 @@ const server = createServer(async (req, res) => {
         throw new UpdaterError("UPDATE_BUSY", "已有升级任务正在运行", 409);
       const body = await readJson(req);
       const targetVersion = String(body.targetVersion ?? "").trim();
-      const backupPassphrase = String(body.backupPassphrase ?? "");
       if (!/^\d+\.\d+$/.test(targetVersion))
         throw new UpdaterError("TARGET_VERSION_INVALID", "目标版本格式无效");
-      if (backupPassphrase.length < 12 || backupPassphrase.length > 256)
-        throw new UpdaterError(
-          "BACKUP_PASSPHRASE_INVALID",
-          "升级前备份口令必须为 12–256 位",
-        );
-      if (body.confirmation !== "UPGRADE")
-        throw new UpdaterError(
-          "UPDATE_CONFIRMATION_REQUIRED",
-          "必须确认升级操作",
-        );
       updateState({ phase: "QUEUED", busy: true, progress: 0 });
-      activeJob = applyUpdate(targetVersion, backupPassphrase).finally(() => {
+      activeJob = applyUpdate(targetVersion).finally(() => {
         activeJob = null;
       });
       respond(res, 202, {

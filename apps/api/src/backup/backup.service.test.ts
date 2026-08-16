@@ -96,4 +96,49 @@ describe("BackupService provider compatibility", () => {
       expect.objectContaining({ code: "BACKUP_TOKEN_INVALID" }),
     );
   });
+
+  it("validates mailbox references to one of multiple provider applications", () => {
+    const data = payload();
+    (data.tables as any).microsoftConfigs = [
+      {
+        id: "app-1",
+        name: "Primary",
+        clientId: "11111111-1111-4111-8111-111111111111",
+        clientSecretPlain: "secret-value",
+      },
+      {
+        id: "app-2",
+        name: "Secondary",
+        clientId: "22222222-2222-4222-8222-222222222222",
+        clientSecretPlain: "secret-value-2",
+      },
+    ];
+    data.tables.mailboxes[0] = {
+      ...data.tables.mailboxes[0],
+      provider: "MICROSOFT",
+      microsoftAppConfigId: "app-2",
+    };
+
+    expect(() => (service as any).validatePayload(data)).not.toThrow();
+
+    data.tables.mailboxes[0].microsoftAppConfigId = "missing-app";
+    expect(() => (service as any).validatePayload(data)).toThrowError(
+      expect.objectContaining({ code: "BACKUP_REFERENCE_INVALID" }),
+    );
+  });
+
+  it("does not bind an old independent refresh-token mailbox to the first app", () => {
+    expect(
+      (service as any).restoredProviderApps(
+        {},
+        "MICROSOFT",
+        "CLIENT_ID_REFRESH_TOKEN",
+        [{ id: "app-1" }],
+        [],
+      ),
+    ).toEqual({
+      microsoftAppConfigId: null,
+      googleAppConfigId: null,
+    });
+  });
 });

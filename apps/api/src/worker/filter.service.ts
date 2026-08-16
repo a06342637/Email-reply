@@ -129,8 +129,21 @@ export class FilterService {
     const contentType = headers.get("content-type")?.toLowerCase() ?? "";
     const subject = (message.subject ?? "").toLowerCase();
     if (
+      contentType.includes("message/disposition-notification") ||
+      /report-type\s*=\s*["']?disposition-notification["']?/.test(contentType)
+    )
+      return {
+        skip: "READ_RECEIPT",
+        senderName,
+        senderEmail,
+        replyToEmail,
+      };
+    if (
       contentType.includes("multipart/report") ||
       contentType.includes("message/delivery-status") ||
+      headers.has("original-recipient") ||
+      headers.has("final-recipient") ||
+      headers.has("reporting-mta") ||
       /^(mailer-daemon|postmaster)@/.test(senderEmail) ||
       /undeliverable|delivery status notification|returned mail|mail delivery failed|无法送达|投递失败|传递状态通知/i.test(
         subject,
@@ -142,20 +155,6 @@ export class FilterService {
         senderEmail,
         replyToEmail,
       };
-    if (
-      headers.has("disposition-notification-to") ||
-      headers.has("return-receipt-to") ||
-      headers.has("original-recipient") ||
-      headers.has("final-recipient") ||
-      headers.has("reporting-mta")
-    ) {
-      return {
-        skip: "READ_RECEIPT",
-        senderName,
-        senderEmail,
-        replyToEmail,
-      };
-    }
 
     const domain = this.emailDomain(senderEmail);
     if (
