@@ -6,6 +6,8 @@ import { TemplateService } from "./template.service.js";
 import { MailProviderService } from "../providers/mail-provider.service.js";
 import type { TemplateVariables } from "@autoreply/shared";
 import { AppConfig } from "../core/config.js";
+import { SmtpConfigService } from "../smtp/smtp-config.service.js";
+import { SmtpDeliveryService } from "../smtp/smtp-delivery.service.js";
 
 @Injectable()
 export class TestMailService {
@@ -14,31 +16,51 @@ export class TestMailService {
     private readonly templates: TemplateService,
     private readonly transport: MailProviderService,
     private readonly config: AppConfig,
+    private readonly smtpConfigs: SmtpConfigService,
+    private readonly smtp: SmtpDeliveryService,
   ) {}
 
   async send(
     templateId: string,
-    mailboxId: string,
-    recipient: string,
-    custom?: Record<string, unknown>,
+    input: {
+      mailboxId?: string;
+      smtpConfigId?: string;
+      recipient: string;
+      custom?: Record<string, unknown>;
+    },
   ) {
+    const { mailboxId, smtpConfigId, recipient, custom } = input;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient))
       throw new AppError("EMAIL_INVALID", "测试收件地址无效", 400);
-    const [template, mailbox] = await Promise.all([
-      this.prisma.replyTemplate.findUniqueOrThrow({
-        where: { id: templateId },
-      }),
-      this.prisma.mailbox.findUniqueOrThrow({ where: { id: mailboxId } }),
-    ]);
+    if (Boolean(mailboxId) === Boolean(smtpConfigId))
+      throw new AppError(
+        "TEST_SEND_CHANNEL_INVALID",
+        "请选择一个邮箱 API 或 SMTP 配置作为测试发件通道",
+        400,
+      );
+    const template = await this.prisma.replyTemplate.findUniqueOrThrow({
+      where: { id: templateId },
+    });
     if (!template.publishedRevisionId)
       throw new AppError("TEMPLATE_NOT_PUBLISHED", "请先发布模板", 409);
-    if (mailbox.status !== "CONNECTED")
+    const mailbox = mailboxId
+      ? await this.prisma.mailbox.findUniqueOrThrow({
+          where: { id: mailboxId },
+        })
+      : null;
+    const smtpConfig = smtpConfigId
+      ? await this.smtpConfigs.resolve(smtpConfigId)
+      : null;
+    if (mailbox && mailbox.status !== "CONNECTED")
       throw new AppError("MAILBOX_NOT_CONNECTED", "所选邮箱未连接", 409);
     const now = new Date();
     const timeZone = await this.timezone();
     const base: TemplateVariables = {
       sender: { name: "测试发件人", email: "sender@example.com" },
-      mailbox: { name: mailbox.displayName, email: mailbox.email },
+      mailbox: {
+        name: mailbox?.displayName || smtpConfig?.fromName || smtpConfig!.name,
+        email: mailbox?.email || smtpConfig!.fromEmail,
+      },
       message: {
         subject: "这是一封模板测试邮件",
         received_at: now.toISOString(),
@@ -67,9 +89,28 @@ export class TestMailService {
     );
     const trackingId = `test-${randomUUID()}`;
     const instanceId = await this.instanceId();
+    if (smtpConfigId) {
+      const result = await this.smtp.sendReply({
+        smtpConfigId,
+        recipient,
+        replyToFallback: smtpConfig!.replyToEmail || smtpConfig!.fromEmail,
+        subject: `[自动回复模板测试] ${rendered.subject}`,
+        html: rendered.html,
+        text: rendered.text,
+        assets: rendered.assets,
+        trackingId,
+        instanceId,
+      });
+      return {
+        ...result,
+        trackingId,
+        channel: "SMTP",
+        warnings: rendered.warnings,
+      };
+    }
     const draft = await this.transport.createTestDraft({
-      mailboxId,
-      mailboxEmail: mailbox.email,
+      mailboxId: mailboxId!,
+      mailboxEmail: mailbox!.email,
       recipient,
       subject: rendered.subject,
       html: rendered.html,
@@ -78,9 +119,14 @@ export class TestMailService {
       trackingId,
       instanceId,
     });
-    await this.transport.uploadAssets(mailboxId, draft.id, rendered.assets);
-    await this.transport.sendDraft(mailboxId, draft.id);
-    return { accepted: true, trackingId };
+    await this.transport.uploadAssets(mailboxId!, draft.id, rendered.assets);
+    await this.transport.sendDraft(mailboxId!, draft.id);
+    return {
+      accepted: true,
+      trackingId,
+      channel: "MAILBOX_API",
+      warnings: rendered.warnings,
+    };
   }
 
   private async instanceId(): Promise<string> {

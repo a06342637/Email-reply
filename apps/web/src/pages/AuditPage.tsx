@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { Card, Loading, PageHeader, fmtDate } from "../ui";
+import { Card, Loading, PageHeader, Pagination, fmtDate } from "../ui";
 export function AuditPage() {
   const [data, setData] = useState<any>();
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   useEffect(() => {
-    api(`/api/v1/audit-logs?page=${page}`).then(setData);
-  }, [page]);
+    api(`/api/v1/audit-logs?page=${page}&pageSize=${pageSize}`).then(setData);
+  }, [page, pageSize]);
   if (!data) return <Loading />;
   return (
     <>
@@ -47,20 +48,16 @@ export function AuditPage() {
             </tbody>
           </table>
         </div>
-        <div className="pagination">
-          <button disabled={page <= 1} onClick={() => setPage(page - 1)}>
-            上一页
-          </button>
-          <span>
-            第 {page} 页 · 共 {data.total} 条
-          </span>
-          <button
-            disabled={page * 50 >= data.total}
-            onClick={() => setPage(page + 1)}
-          >
-            下一页
-          </button>
-        </div>
+        <Pagination
+          page={data.page}
+          pageSize={data.pageSize}
+          total={data.total}
+          onPageChange={setPage}
+          onPageSizeChange={(value) => {
+            setPageSize(value);
+            setPage(1);
+          }}
+        />
       </Card>
     </>
   );

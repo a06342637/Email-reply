@@ -1,4 +1,10 @@
-import { useEffect, useId, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { AlertTriangle, CheckCircle2, LoaderCircle, X } from "lucide-react";
 
 let uiTimezone = "Asia/Shanghai";
@@ -138,6 +144,100 @@ export function Notice({
     <div className={`notice ${kind}`}>
       <Icon size={18} />
       <span>{children}</span>
+    </div>
+  );
+}
+export function Pagination({
+  page,
+  pageSize,
+  total,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(totalPages, Math.max(1, page));
+  const [jump, setJump] = useState(String(currentPage));
+  useEffect(() => setJump(String(currentPage)), [currentPage]);
+  useEffect(() => {
+    if (page !== currentPage) onPageChange(currentPage);
+  }, [currentPage, onPageChange, page]);
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const value = Number.parseInt(jump, 10);
+    onPageChange(
+      Number.isFinite(value) ? Math.min(totalPages, Math.max(1, value)) : 1,
+    );
+  }
+  return (
+    <div className="pagination">
+      <div className="pagination-summary">
+        <span>共 {total} 条</span>
+        <label>
+          每页
+          <select
+            value={pageSize}
+            onChange={(event) => onPageSizeChange(Number(event.target.value))}
+          >
+            {[5, 10, 30, 50, 100].map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+          条
+        </label>
+      </div>
+      <div className="pagination-controls">
+        <button
+          type="button"
+          disabled={currentPage <= 1}
+          onClick={() => onPageChange(1)}
+        >
+          首页
+        </button>
+        <button
+          type="button"
+          disabled={currentPage <= 1}
+          onClick={() => onPageChange(currentPage - 1)}
+        >
+          上一页
+        </button>
+        <span>
+          第 {currentPage} / {totalPages} 页
+        </span>
+        <button
+          type="button"
+          disabled={currentPage >= totalPages}
+          onClick={() => onPageChange(currentPage + 1)}
+        >
+          下一页
+        </button>
+        <button
+          type="button"
+          disabled={currentPage >= totalPages}
+          onClick={() => onPageChange(totalPages)}
+        >
+          末页
+        </button>
+        <form onSubmit={submit}>
+          <span>跳至</span>
+          <input
+            type="number"
+            min={1}
+            max={totalPages}
+            value={jump}
+            onChange={(event) => setJump(event.target.value)}
+          />
+          <span>页</span>
+          <button type="submit">跳转</button>
+        </form>
+      </div>
     </div>
   );
 }

@@ -14,12 +14,18 @@ const baseReceipt = {
   subject: "Order question",
   receivedAt: new Date("2026-08-14T10:00:00.000Z"),
   folder: "INBOX",
+  internetMessageId: "<source@example.net>",
   trackingId: "tracking-1",
   templateRevisionId: "revision-1",
-  task: { status: "RUNNING" },
+  task: {
+    status: "RUNNING",
+    sendTransport: "MAILBOX_API",
+    smtpConfigId: null,
+  },
   mailbox: {
     id: "mailbox-1",
     status: "CONNECTED",
+    provider: "MICROSOFT",
     email: "service@example.com",
     displayName: "Service",
   },
@@ -50,6 +56,7 @@ function fixture(findResults: unknown[], render: () => Promise<unknown>) {
       update: vi.fn().mockResolvedValue({}),
     },
     transactionalOutbox: { upsert: vi.fn().mockResolvedValue({}) },
+    autoReplyTask: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     processingLog: { create: vi.fn().mockResolvedValue({}) },
     systemSetting: { findUnique: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn(async (input: unknown) => {
@@ -70,6 +77,7 @@ function fixture(findResults: unknown[], render: () => Promise<unknown>) {
     findSentByTracking: vi.fn(),
   };
   const alerts = { resolve: vi.fn(), open: vi.fn() };
+  const smtp = { sendReply: vi.fn() };
   const service = new MailProcessorService(
     prisma as never,
     { timezone: "Asia/Shanghai" } as never,
@@ -77,8 +85,9 @@ function fixture(findResults: unknown[], render: () => Promise<unknown>) {
     transport as never,
     alerts as never,
     { assertOpen: vi.fn().mockResolvedValue(undefined) } as never,
+    smtp as never,
   );
-  return { service, prisma, templates, transport, alerts, tx };
+  return { service, prisma, templates, transport, alerts, smtp, tx };
 }
 
 describe("MailProcessorService", () => {
@@ -352,5 +361,129 @@ describe("MailProcessorService", () => {
     expect(tx.replyAttempt.update).toHaveBeenCalledTimes(1);
     expect(tx.processingLog.create).toHaveBeenCalledTimes(1);
     expect(alerts.resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends through SMTP with Reply-To and marks the provider-accepted message sent", async () => {
+    const smtpReceipt = {
+      ...baseReceipt,
+      task: {
+        status: "RUNNING",
+        sendTransport: "SMTP",
+        smtpConfigId: "smtp-1",
+      },
+    };
+    const { service, prisma, smtp, transport, tx } = fixture(
+      [
+        smtpReceipt,
+        smtpReceipt,
+        { task: { status: "RUNNING" }, mailbox: { status: "CONNECTED" } },
+      ],
+      async () => ({
+        subject: "Re: Order question",
+        html: "<p>Received</p>",
+        text: "Received",
+        assets: [],
+      }),
+    );
+    prisma.messageReceipt.findUniqueOrThrow.mockResolvedValue(smtpReceipt);
+    smtp.sendReply.mockResolvedValue({ messageId: "<sent@example.com>" });
+
+    await service.process(baseReceipt.id);
+
+    expect(smtp.sendReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        smtpConfigId: "smtp-1",
+        recipient: "case-123@replies.example.net",
+        sourceInternetMessageId: "<source@example.net>",
+      }),
+    );
+    expect(transport.createReplyDraft).not.toHaveBeenCalled();
+    expect(tx.processingLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "SENT",
+          reason: expect.stringContaining("SMTP"),
+        }),
+      }),
+    );
+  });
+
+  it("keeps a DATA-stage SMTP timeout uncertain instead of retrying it", async () => {
+    const smtpReceipt = {
+      ...baseReceipt,
+      task: {
+        status: "RUNNING",
+        sendTransport: "SMTP",
+        smtpConfigId: "smtp-1",
+      },
+    };
+    const { service, prisma, smtp } = fixture(
+      [
+        smtpReceipt,
+        smtpReceipt,
+        { task: { status: "RUNNING" }, mailbox: { status: "CONNECTED" } },
+        smtpReceipt,
+      ],
+      async () => ({
+        subject: "Re: Order question",
+        html: "<p>Received</p>",
+        text: "Received",
+        assets: [],
+      }),
+    );
+    const { SmtpDeliveryError } =
+      await import("../smtp/smtp-delivery.service.js");
+    smtp.sendReply.mockRejectedValue(
+      new SmtpDeliveryError(
+        "SMTP_SEND_STATUS_UNCERTAIN",
+        "Connection lost during DATA",
+        502,
+        true,
+      ),
+    );
+
+    await service.process(baseReceipt.id);
+
+    expect(prisma.messageReceipt.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: "UNCERTAIN" }),
+      }),
+    );
+    expect(prisma.transactionalOutbox.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ kind: "PROCESS_MESSAGE" }),
+      }),
+    );
+  });
+
+  it("marks an interrupted in-flight SMTP attempt uncertain on worker recovery", async () => {
+    const smtpReceipt = {
+      ...baseReceipt,
+      task: {
+        status: "RUNNING",
+        sendTransport: "SMTP",
+        smtpConfigId: "smtp-1",
+      },
+    };
+    const { service, prisma, smtp } = fixture(
+      [smtpReceipt, smtpReceipt],
+      async () => ({}),
+    );
+    prisma.replyAttempt.findUnique.mockResolvedValue({
+      id: "attempt-1",
+      receiptId: baseReceipt.id,
+      state: "SENDING",
+      transport: "SMTP",
+      smtpSendStartedAt: new Date("2026-08-16T10:00:00.000Z"),
+    });
+
+    await service.verify(baseReceipt.id, "attempt-1", 0, "SEND");
+
+    expect(smtp.sendReply).not.toHaveBeenCalled();
+    expect(prisma.messageReceipt.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: "UNCERTAIN" }),
+      }),
+    );
   });
 });

@@ -33,6 +33,21 @@ let googleApps = [
     updatedAt: now,
   },
 ];
+const smtpConfig = {
+  id: "smtp-1",
+  name: "客服 SMTP",
+  host: "smtp.example.com",
+  port: 587,
+  security: "STARTTLS",
+  username: "service@example.com",
+  fromEmail: "service@example.com",
+  fromName: "客户服务",
+  replyToEmail: null,
+  hasPassword: true,
+  taskCount: 0,
+  createdAt: now,
+  updatedAt: now,
+};
 let smokeSettings = {
   siteName: "MailPilot 自动回复",
   timezone: "Asia/Shanghai",
@@ -48,7 +63,7 @@ let smokeSettings = {
   dedupeDays: 365,
   sessionIdleMinutes: 120,
   sessionAbsoluteMinutes: 720,
-  version: "0.16",
+  version: "0.17",
 };
 
 const template = {
@@ -187,7 +202,7 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/api/v1/events") return eventStream(req, res);
   if (url.pathname.startsWith("/api/")) {
     const body = await readJson(req);
-    return api(url.pathname, req.method || "GET", body, res);
+    return api(url, req.method || "GET", body, res);
   }
   const candidate = normalize(url.pathname).replace(/^([/\\])+/, "");
   const file = join(root, candidate || "index.html");
@@ -202,11 +217,22 @@ server.listen(port, "127.0.0.1", () => {
   console.log(`UI smoke server listening on http://127.0.0.1:${port}`);
 });
 
-function api(path, method, body, res) {
+function api(url, method, body, res) {
+  const path = url.pathname;
+  const requestedPage = Number.parseInt(
+    url.searchParams.get("page") || "1",
+    10,
+  );
+  const requestedPageSize = Number.parseInt(
+    url.searchParams.get("pageSize") || "50",
+    10,
+  );
   const page = (items) => ({
     items,
-    page: 1,
-    pageSize: 50,
+    page: Number.isFinite(requestedPage) ? Math.max(1, requestedPage) : 1,
+    pageSize: Number.isFinite(requestedPageSize)
+      ? Math.min(100, Math.max(1, requestedPageSize))
+      : 50,
     total: items.length,
   });
   if (path === "/api/v1/auth/me")
@@ -419,7 +445,7 @@ function api(path, method, body, res) {
   }
   if (path === "/api/v1/system/info")
     return json(res, {
-      version: "0.16",
+      version: "0.17",
       node: process.version,
       database: true,
       redis: true,
@@ -434,11 +460,11 @@ function api(path, method, body, res) {
       phase: smokeUpdateCompleted ? "SUCCEEDED" : "UP_TO_DATE",
       busy: false,
       progress: 100,
-      currentVersion: smokeUpdateCompleted ? "0.17" : "0.16",
-      latestVersion: smokeUpdateCompleted ? "0.17" : "0.16",
+      currentVersion: smokeUpdateCompleted ? "0.18" : "0.17",
+      latestVersion: smokeUpdateCompleted ? "0.18" : "0.17",
       updateAvailable: false,
       message: smokeUpdateCompleted
-        ? "已成功升级到 v0.17"
+        ? "已成功升级到 v0.18"
         : "当前已经是最新正式版本",
       checkedAt: now,
       startedAt: null,
@@ -451,19 +477,19 @@ function api(path, method, body, res) {
       rollbackImage: null,
       error: null,
       logs: smokeUpdateCompleted
-        ? ["自动备份已完成", "v0.17 健康检查通过"]
+        ? ["自动备份已完成", "v0.18 健康检查通过"]
         : ["当前已是最新版本"],
-      updaterVersion: "0.16",
+      updaterVersion: "0.17",
     });
   if (path === "/api/v1/update/check")
     return json(res, {
       phase: "AVAILABLE",
       busy: false,
       progress: 100,
-      currentVersion: "0.16",
-      latestVersion: "0.17",
+      currentVersion: "0.17",
+      latestVersion: "0.18",
       updateAvailable: true,
-      message: "发现正式版本 v0.17",
+      message: "发现正式版本 v0.18",
       checkedAt: now,
       startedAt: null,
       finishedAt: null,
@@ -474,14 +500,14 @@ function api(path, method, body, res) {
       backupFile: null,
       rollbackImage: null,
       error: null,
-      logs: ["开始检查更新", "发现 v0.17"],
-      updaterVersion: "0.16",
+      logs: ["开始检查更新", "发现 v0.18"],
+      updaterVersion: "0.17",
     });
   if (path === "/api/v1/update/apply") {
     const updateBody =
       body && typeof body === "object" ? body : Object.create(null);
     if (
-      updateBody.targetVersion !== "0.17" ||
+      updateBody.targetVersion !== "0.18" ||
       "backupPassphrase" in updateBody ||
       "confirmation" in updateBody
     )
@@ -498,12 +524,13 @@ function api(path, method, body, res) {
     smokeUpdateCompleted = true;
     return json(
       res,
-      { accepted: true, targetVersion: "0.17", phase: "QUEUED" },
+      { accepted: true, targetVersion: "0.18", phase: "QUEUED" },
       202,
     );
   }
   if (path === "/api/v1/webhooks") return json(res, []);
-  if (path === "/api/v1/alerts") return json(res, []);
+  if (path === "/api/v1/smtp/configs") return json(res, [smtpConfig]);
+  if (path === "/api/v1/alerts") return json(res, page([]));
   if (path === "/api/v1/processing-logs") return json(res, page([]));
   if (path === "/api/v1/system-logs")
     return json(res, { ...page([]), components: [] });

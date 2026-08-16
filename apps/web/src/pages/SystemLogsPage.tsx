@@ -8,7 +8,7 @@ import {
 import { Download, RefreshCw, Search } from "lucide-react";
 import { api } from "../api";
 import type { SystemLog } from "../types";
-import { Card, Loading, PageHeader, Status, fmtDate } from "../ui";
+import { Card, Loading, PageHeader, Pagination, Status, fmtDate } from "../ui";
 
 type LogResponse = {
   items: SystemLog[];
@@ -21,6 +21,7 @@ type LogResponse = {
 export function SystemLogsPage() {
   const [data, setData] = useState<LogResponse>();
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [level, setLevel] = useState("");
   const [component, setComponent] = useState("");
   const [query, setQuery] = useState("");
@@ -28,14 +29,17 @@ export function SystemLogsPage() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const params = useMemo(() => {
-    const value = new URLSearchParams({ page: String(page), pageSize: "50" });
+    const value = new URLSearchParams({
+      page: String(page),
+      pageSize: String(pageSize),
+    });
     if (level) value.set("level", level);
     if (component) value.set("component", component);
     if (search) value.set("query", search);
     if (from) value.set("from", from);
     if (to) value.set("to", to);
     return value;
-  }, [page, level, component, search, from, to]);
+  }, [page, pageSize, level, component, search, from, to]);
 
   const load = useCallback(async () => {
     setData(await api(`/api/v1/system-logs?${params.toString()}`));
@@ -184,20 +188,16 @@ export function SystemLogsPage() {
             </tbody>
           </table>
         </div>
-        <div className="pagination">
-          <button disabled={page <= 1} onClick={() => setPage(page - 1)}>
-            上一页
-          </button>
-          <span>
-            第 {page} / {Math.max(1, Math.ceil(data.total / data.pageSize))} 页
-          </span>
-          <button
-            disabled={page * data.pageSize >= data.total}
-            onClick={() => setPage(page + 1)}
-          >
-            下一页
-          </button>
-        </div>
+        <Pagination
+          page={data.page}
+          pageSize={data.pageSize}
+          total={data.total}
+          onPageChange={setPage}
+          onPageSizeChange={(value) => {
+            setPageSize(value);
+            setPage(1);
+          }}
+        />
       </Card>
     </>
   );

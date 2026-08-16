@@ -88,6 +88,53 @@ describe("Liquid template restrictions", () => {
       }),
     ).rejects.toMatchObject({ code: "TEMPLATE_SYNTAX_INVALID" });
   });
+
+  it("regenerates plain text from rich HTML when automatic text is enabled", async () => {
+    const service = new TemplateService({
+      templateRevision: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          id: "revision-1",
+          version: 1,
+          subjectTemplate: "Re: {{ message.subject }}",
+          sanitizedHtml: "<p>Hello {{ sender.name }}</p>",
+          textContent: "stale plain text",
+          autoTextContent: true,
+          assets: [],
+          template: { name: "Rich template" },
+        }),
+      },
+    } as never);
+
+    const result = await service.render("revision-1", {
+      sender: { name: "Buyer", email: "buyer@example.net" },
+      mailbox: { name: "Service", email: "service@example.com" },
+      message: {
+        subject: "Order",
+        received_at: new Date().toISOString(),
+        folder: "inbox",
+      },
+      rule: { name: "Default" },
+      system: {
+        current_date: "2026/8/16",
+        current_time: "10:00:00",
+        current_datetime: "2026/8/16 10:00:00",
+      },
+    });
+
+    expect(result.text).toContain("Hello Buyer");
+    expect(result.text).not.toContain("stale plain text");
+  });
+
+  it("warns about promotional wording commonly found in link-heavy templates", () => {
+    const service = new TemplateService({} as never);
+
+    expect(
+      service.deliverabilityWarnings(
+        '<p><a href="https://example.com">唯一永久官方导航</a></p>',
+        "唯一永久官方导航",
+      ),
+    ).toContain("正文包含常见营销词，最终投递可能受发件信誉影响");
+  });
 });
 
 describe("TemplateService deletion", () => {
@@ -110,11 +157,19 @@ describe("TemplateService deletion", () => {
         findUnique: vi.fn().mockResolvedValue({
           id: "template-1",
           revisions: [{ id: "revision-1" }, { id: "revision-2" }],
-          _count: { defaultForTasks: 0, rules: 0 },
+          defaultForTasks: [],
+          rules: [],
         }),
         delete: vi.fn().mockResolvedValue({}),
       },
+      replyRule: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      autoReplyTask: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
       messageReceipt: { count: vi.fn().mockResolvedValue(0) },
+      $transaction: vi.fn((operations: Array<Promise<unknown>>) =>
+        Promise.all(operations),
+      ),
     };
     const service = new TemplateService(prisma as never);
 
@@ -132,7 +187,14 @@ describe("TemplateService deletion", () => {
         findUnique: vi.fn().mockResolvedValue({
           id: "template-1",
           revisions: [{ id: "revision-1" }],
-          _count: { defaultForTasks: 1, rules: 2 },
+          defaultForTasks: [{ id: "task-1", name: "Active task" }],
+          rules: [
+            {
+              id: "rule-1",
+              name: "Priority rule",
+              task: { id: "task-2", name: "Second task" },
+            },
+          ],
         }),
         delete: vi.fn(),
       },
@@ -153,7 +215,8 @@ describe("TemplateService deletion", () => {
         findUnique: vi.fn().mockResolvedValue({
           id: "template-1",
           revisions: [{ id: "revision-1" }],
-          _count: { defaultForTasks: 0, rules: 0 },
+          defaultForTasks: [],
+          rules: [],
         }),
         delete: vi.fn(),
       },

@@ -1,9 +1,9 @@
 {
   "name": "mailpilot-autoreply",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "private": true,
   "type": "module",
-  "description": "Dockerized Microsoft and Gmail mailbox auto-reply system",
+  "description": "Dockerized Microsoft and Gmail auto-reply system with optional SMTP delivery",
   "workspaces": [
     "apps/api",
     "apps/web",

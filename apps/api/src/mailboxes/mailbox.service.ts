@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, SendTransport } from "@prisma/client";
 import { PrismaService } from "../core/prisma.js";
 import { CryptoService } from "../core/crypto.js";
 import { AppError } from "../core/http.js";
@@ -54,6 +54,14 @@ export class MailboxService {
             },
             defaultTemplate: {
               select: { id: true, name: true, publishedRevisionId: true },
+            },
+            smtpConfig: {
+              select: {
+                id: true,
+                name: true,
+                fromEmail: true,
+                fromName: true,
+              },
             },
             rules: {
               orderBy: { priority: "asc" },
@@ -209,12 +217,18 @@ export class MailboxService {
       pollIntervalSeconds: number;
       backlogPerMinute: number;
       defaultTemplateId: string;
+      sendTransport: SendTransport;
+      smtpConfigId?: string | null;
     },
   ) {
     const name = input.name.trim();
     if (!name)
       throw new AppError("TASK_NAME_REQUIRED", "任务名称不能为空", 400);
     await this.requirePublishedTemplate(input.defaultTemplateId);
+    const smtpConfigId = await this.validateTransport(
+      input.sendTransport,
+      input.smtpConfigId,
+    );
     const mailbox = await this.prisma.mailbox.findUniqueOrThrow({
       where: { id: mailboxId },
     });
@@ -239,6 +253,8 @@ export class MailboxService {
           pollIntervalSeconds: input.pollIntervalSeconds,
           backlogPerMinute: input.backlogPerMinute,
           defaultTemplateId: input.defaultTemplateId,
+          sendTransport: input.sendTransport,
+          smtpConfigId,
           status: "DRAFT",
           activationAt: null,
           pausedAt: null,
@@ -250,7 +266,7 @@ export class MailboxService {
       });
     }
     return this.prisma.autoReplyTask.create({
-      data: { mailboxId, ...input, name },
+      data: { mailboxId, ...input, name, smtpConfigId },
     });
   }
 
@@ -261,11 +277,13 @@ export class MailboxService {
       pollIntervalSeconds?: number;
       backlogPerMinute?: number;
       defaultTemplateId?: string;
+      sendTransport?: SendTransport;
+      smtpConfigId?: string | null;
     },
   ) {
     const task = await this.prisma.autoReplyTask.findUnique({
       where: { id },
-      select: { status: true },
+      select: { status: true, sendTransport: true, smtpConfigId: true },
     });
     if (!task || task.status === "DELETED")
       throw new AppError("TASK_NOT_EDITABLE", "任务不存在或已删除", 409);
@@ -276,13 +294,21 @@ export class MailboxService {
     }
     if (input.defaultTemplateId)
       await this.requirePublishedTemplate(input.defaultTemplateId);
-    return this.prisma.autoReplyTask.update({ where: { id }, data: input });
+    const sendTransport = input.sendTransport ?? task.sendTransport;
+    const smtpConfigId = await this.validateTransport(
+      sendTransport,
+      input.smtpConfigId === undefined ? task.smtpConfigId : input.smtpConfigId,
+    );
+    return this.prisma.autoReplyTask.update({
+      where: { id },
+      data: { ...input, sendTransport, smtpConfigId },
+    });
   }
 
   async startTask(id: string) {
     const task = await this.prisma.autoReplyTask.findUniqueOrThrow({
       where: { id },
-      include: { mailbox: true, defaultTemplate: true },
+      include: { mailbox: true, defaultTemplate: true, smtpConfig: true },
     });
     if (task.status !== "DRAFT")
       throw new AppError("TASK_START_INVALID", "只有草稿任务可以首次运行", 409);
@@ -298,6 +324,7 @@ export class MailboxService {
         "请选择已发布的默认模板",
         409,
       );
+    this.assertTaskTransport(task);
     const hasCursors = await this.hasInitializedCursor(
       task.mailboxId,
       task.mailbox.provider,
@@ -335,7 +362,7 @@ export class MailboxService {
   async resumeTask(id: string) {
     const task = await this.prisma.autoReplyTask.findUniqueOrThrow({
       where: { id },
-      include: { mailbox: true, defaultTemplate: true },
+      include: { mailbox: true, defaultTemplate: true, smtpConfig: true },
     });
     if (!["PAUSED", "CIRCUIT_OPEN"].includes(task.status))
       throw new AppError(
@@ -355,21 +382,53 @@ export class MailboxService {
         "请选择已发布的默认模板",
         409,
       );
+    this.assertTaskTransport(task);
     const hasCursors = await this.hasInitializedCursor(
       task.mailboxId,
       task.mailbox.provider,
     );
     const now = new Date();
-    const result = await this.prisma.autoReplyTask.update({
-      where: { id },
-      data: {
-        status: hasCursors ? "RUNNING" : "INITIALIZING",
-        activationAt: task.activationAt ?? now,
-        pausedAt: null,
-        nextPollAt: now,
-        consecutiveFailures: 0,
-        circuitOpenedAt: null,
-      },
+    const resumeFrom = hasCursors
+      ? await this.resumeScanFrom(
+          task.mailboxId,
+          task.mailbox.provider,
+          task.activationAt,
+          task.pausedAt,
+        )
+      : null;
+    const result = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.autoReplyTask.update({
+        where: { id },
+        data: {
+          status: hasCursors ? "RUNNING" : "INITIALIZING",
+          activationAt: task.activationAt ?? now,
+          pausedAt: null,
+          nextPollAt: now,
+          consecutiveFailures: 0,
+          circuitOpenedAt: null,
+        },
+      });
+      if (resumeFrom && task.mailbox.provider === "MICROSOFT")
+        await tx.folderCursor.updateMany({
+          where: { mailboxId: task.mailboxId },
+          data: {
+            deltaLinkEncrypted: null,
+            nextLinkEncrypted: null,
+            initializedAt: null,
+            highWaterAt: resumeFrom,
+          },
+        });
+      if (resumeFrom && task.mailbox.provider === "GOOGLE")
+        await tx.gmailCursor.updateMany({
+          where: { mailboxId: task.mailboxId },
+          data: {
+            historyIdEncrypted: null,
+            pageTokenEncrypted: null,
+            initializedAt: null,
+            highWaterAt: resumeFrom,
+          },
+        });
+      return updated;
     });
     await this.requeuePending(id, "resume");
     return result;
@@ -394,6 +453,8 @@ export class MailboxService {
           deletedAt: new Date(),
           nextPollAt: null,
           defaultTemplateId: null,
+          sendTransport: "MAILBOX_API",
+          smtpConfigId: null,
           activationAt: null,
         },
       }),
@@ -488,6 +549,76 @@ export class MailboxService {
         409,
       );
     }
+  }
+
+  private async validateTransport(
+    sendTransport: SendTransport,
+    smtpConfigId?: string | null,
+  ): Promise<string | null> {
+    if (sendTransport === "MAILBOX_API") return null;
+    if (!smtpConfigId)
+      throw new AppError(
+        "SMTP_CONFIG_REQUIRED",
+        "使用 SMTP 发件时必须选择 SMTP 配置",
+        409,
+      );
+    const config = await this.prisma.smtpConfig.findUnique({
+      where: { id: smtpConfigId },
+      select: { id: true },
+    });
+    if (!config)
+      throw new AppError(
+        "SMTP_CONFIG_NOT_FOUND",
+        "选择的 SMTP 配置不存在",
+        409,
+      );
+    return config.id;
+  }
+
+  private assertTaskTransport(task: {
+    sendTransport: SendTransport;
+    smtpConfigId: string | null;
+    smtpConfig: { id: string } | null;
+  }): void {
+    if (
+      task.sendTransport === "SMTP" &&
+      (!task.smtpConfigId || !task.smtpConfig)
+    )
+      throw new AppError(
+        "SMTP_CONFIG_REQUIRED",
+        "任务的 SMTP 配置不可用，请先重新选择发件配置",
+        409,
+      );
+  }
+
+  private async resumeScanFrom(
+    mailboxId: string,
+    provider: "MICROSOFT" | "GOOGLE",
+    activationAt: Date | null,
+    pausedAt: Date | null,
+  ): Promise<Date> {
+    const successfulAt =
+      provider === "GOOGLE"
+        ? (
+            await this.prisma.gmailCursor.findUnique({
+              where: { mailboxId },
+              select: { lastSuccessfulAt: true },
+            })
+          )?.lastSuccessfulAt
+        : (
+            await this.prisma.folderCursor.findFirst({
+              where: { mailboxId, lastSuccessfulAt: { not: null } },
+              orderBy: { lastSuccessfulAt: "asc" },
+              select: { lastSuccessfulAt: true },
+            })
+          )?.lastSuccessfulAt;
+    const earliest = Math.min(
+      pausedAt?.getTime() ?? Date.now(),
+      successfulAt?.getTime() ?? pausedAt?.getTime() ?? Date.now(),
+    );
+    return new Date(
+      Math.max(activationAt?.getTime() ?? 0, earliest - 2 * 60_000),
+    );
   }
 
   private normalizeConditions(raw: Record<string, unknown>): RuleConditions {

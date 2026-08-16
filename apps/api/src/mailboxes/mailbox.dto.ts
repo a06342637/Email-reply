@@ -3,6 +3,7 @@ import {
   IsArray,
   IsBoolean,
   IsInt,
+  IsEnum,
   IsObject,
   IsOptional,
   IsString,
@@ -12,6 +13,7 @@ import {
   ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
+import { SendTransport } from "@prisma/client";
 
 export class CreateTaskDto {
   @IsString()
@@ -30,6 +32,13 @@ export class CreateTaskDto {
 
   @IsString()
   defaultTemplateId!: string;
+
+  @IsEnum(SendTransport)
+  sendTransport!: SendTransport;
+
+  @IsOptional()
+  @IsString()
+  smtpConfigId?: string | null;
 }
 
 export class UpdateTaskDto {
@@ -53,6 +62,14 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsString()
   defaultTemplateId?: string;
+
+  @IsOptional()
+  @IsEnum(SendTransport)
+  sendTransport?: SendTransport;
+
+  @IsOptional()
+  @IsString()
+  smtpConfigId?: string | null;
 }
 
 export class ReplyRuleDto {

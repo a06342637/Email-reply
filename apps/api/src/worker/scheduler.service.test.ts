@@ -42,7 +42,7 @@ describe("SchedulerService secret expiry", () => {
     expect(alerts.resolve).toHaveBeenCalledWith("microsoft-secret:app-1:1");
   });
 
-  it("deletes only resolved alerts after the configured retention period", async () => {
+  it("deletes every expired alert at the configured local calendar boundary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-16T00:00:00.000Z"));
     try {
@@ -65,7 +65,7 @@ describe("SchedulerService secret expiry", () => {
       };
       const service = new SchedulerService(
         prisma as never,
-        {} as never,
+        { timezone: "Asia/Shanghai" } as never,
         {} as never,
         {} as never,
         {} as never,
@@ -84,8 +84,7 @@ describe("SchedulerService secret expiry", () => {
       });
       expect(prisma.alert.deleteMany).toHaveBeenCalledWith({
         where: {
-          status: "RESOLVED",
-          lastSeenAt: { lt: new Date("2026-08-02T00:00:00.000Z") },
+          lastSeenAt: { lt: new Date("2026-08-02T16:00:00.000Z") },
         },
       });
     } finally {

@@ -11,6 +11,7 @@ import type { NextFunction, Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "./prisma.js";
+import { ProviderApiError } from "../providers/provider-api.error.js";
 
 const SENSITIVE_KEY =
   /password|passphrase|secret|token|authorization|cookie|code/i;
@@ -68,6 +69,27 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       code = exception.code;
       message = exception.message;
       details = exception.details;
+    } else if (exception instanceof ProviderApiError) {
+      const suspended =
+        exception.provider === "MICROSOFT" &&
+        /ErrorAccountSuspend|Account suspended|verdict is Suspend/i.test(
+          `${exception.code} ${exception.message}`,
+        );
+      status =
+        exception.status === 429
+          ? 429
+          : suspended || (exception.status >= 400 && exception.status < 500)
+            ? 409
+            : 502;
+      code = suspended ? "MICROSOFT_ACCOUNT_SUSPENDED" : exception.code;
+      message = suspended
+        ? "Microsoft 已暂停此邮箱的发信能力。请登录 Outlook 网页版，按收件箱中的提示验证账户或解除限制后再测试；也可以为任务改用 SMTP 发件。"
+        : exception.message.replace(/[\r\n]+/g, " ").slice(0, 1_000);
+      details = {
+        provider: exception.provider,
+        providerStatus: exception.status || undefined,
+        retryAfterSeconds: exception.retryAfterSeconds,
+      };
     } else if (exception instanceof HttpException) {
       status = exception.getStatus();
       code =

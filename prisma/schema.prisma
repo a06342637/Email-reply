@@ -68,6 +68,16 @@ enum OutboxKind {
   WEBHOOK
 }
 
+enum SendTransport {
+  MAILBOX_API
+  SMTP
+}
+
+enum SmtpSecurity {
+  TLS
+  STARTTLS
+}
+
 model AdminUser {
   id                 String          @id @default(uuid())
   username           String          @unique
@@ -138,6 +148,24 @@ model GoogleAppConfig {
   @@index([createdAt])
 }
 
+model SmtpConfig {
+  id                String       @id @default(uuid())
+  name              String
+  host              String
+  port              Int
+  security          SmtpSecurity
+  username          String
+  passwordEncrypted String
+  fromEmail         String
+  fromName          String?
+  replyToEmail      String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  tasks             AutoReplyTask[]
+
+  @@index([createdAt])
+}
+
 model OAuthState {
   id                   String              @id
   provider             MailProvider        @default(MICROSOFT)
@@ -196,6 +224,8 @@ model AutoReplyTask {
   pollIntervalSeconds  Int              @default(30)
   backlogPerMinute     Int              @default(20)
   defaultTemplateId    String?
+  sendTransport        SendTransport    @default(MAILBOX_API)
+  smtpConfigId         String?
   activationAt         DateTime?
   pausedAt             DateTime?
   nextPollAt           DateTime?
@@ -210,10 +240,12 @@ model AutoReplyTask {
   deletedAt            DateTime?
   mailbox              Mailbox          @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
   defaultTemplate      ReplyTemplate?   @relation("DefaultTaskTemplate", fields: [defaultTemplateId], references: [id], onDelete: SetNull)
+  smtpConfig           SmtpConfig?      @relation(fields: [smtpConfigId], references: [id], onDelete: Restrict)
   rules                ReplyRule[]
   receipts             MessageReceipt[]
 
   @@index([status, nextPollAt])
+  @@index([smtpConfigId])
 }
 
 model FolderCursor {
@@ -264,6 +296,7 @@ model TemplateRevision {
   subjectTemplate      String           @default("Re: {{ message.subject }}")
   htmlContent          String
   textContent          String
+  autoTextContent      Boolean          @default(true)
   sanitizedHtml        String
   createdAt            DateTime         @default(now())
   publishedAt          DateTime?
@@ -349,6 +382,7 @@ model ReplyAttempt {
   receiptId         String
   number            Int
   state             MessageState
+  transport         SendTransport  @default(MAILBOX_API)
   draftMessageId    String?
   draftInternetId   String?
   uploadedAssetIds  Json           @default("[]")
@@ -356,6 +390,7 @@ model ReplyAttempt {
   verificationStage Int            @default(0)
   startedAt         DateTime       @default(now())
   sentAcceptedAt    DateTime?
+  smtpSendStartedAt DateTime?
   verifiedAt        DateTime?
   errorCode         String?
   errorMessage      String?

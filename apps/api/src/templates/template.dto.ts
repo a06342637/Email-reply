@@ -1,5 +1,6 @@
 import {
   IsEmail,
+  IsBoolean,
   IsIn,
   IsObject,
   IsOptional,
@@ -30,6 +31,10 @@ export class CreateTemplateDto {
   @IsString()
   @MaxLength(250_000)
   textContent?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  autoTextContent?: boolean;
 }
 
 export class UpdateDraftDto {
@@ -55,11 +60,20 @@ export class UpdateDraftDto {
   @IsString()
   @MaxLength(250_000)
   textContent?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  autoTextContent?: boolean;
 }
 
 export class TestSendDto {
+  @IsOptional()
   @IsString()
-  mailboxId!: string;
+  mailboxId?: string;
+
+  @IsOptional()
+  @IsString()
+  smtpConfigId?: string;
 
   @IsEmail()
   recipient!: string;
@@ -82,6 +96,10 @@ export class PreviewTemplateDto {
   @IsString()
   @MaxLength(250_000)
   textContent?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  autoTextContent?: boolean;
 
   @IsObject()
   variables!: Record<string, unknown>;

@@ -190,7 +190,11 @@ export class DeltaService {
         cursor.deltaLinkEncrypted,
         this.cursorContext(task.mailboxId, folder),
       );
-    else url = this.initialDeltaUrl(folder, task.activationAt ?? new Date());
+    else
+      url = this.initialDeltaUrl(
+        folder,
+        cursor.highWaterAt ?? task.activationAt ?? new Date(),
+      );
 
     let pages = 0;
     while (url) {

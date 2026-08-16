@@ -16,6 +16,14 @@ export type Task = {
   pollIntervalSeconds: number;
   backlogPerMinute: number;
   defaultTemplateId?: string;
+  sendTransport: "MAILBOX_API" | "SMTP";
+  smtpConfigId?: string | null;
+  smtpConfig?: {
+    id: string;
+    name: string;
+    fromEmail: string;
+    fromName?: string | null;
+  } | null;
   averagePollLatencyMs?: number;
   nextPollAt?: string;
   lastPollCompletedAt?: string;
@@ -78,6 +86,21 @@ export type ProviderConfig = {
   callbackUrl: string;
   scopes: string[];
 };
+export type SmtpConfig = {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  security: "TLS" | "STARTTLS";
+  username: string;
+  fromEmail: string;
+  fromName?: string | null;
+  replyToEmail?: string | null;
+  hasPassword: boolean;
+  taskCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
 export type Template = {
   id: string;
   name: string;
@@ -90,6 +113,7 @@ export type Template = {
     subjectTemplate?: string;
     htmlContent?: string;
     textContent?: string;
+    autoTextContent?: boolean;
     sanitizedHtml?: string;
     createdAt?: string;
     publishedAt?: string;

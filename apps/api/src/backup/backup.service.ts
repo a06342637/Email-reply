@@ -117,6 +117,9 @@ export class BackupService {
             },
           ]
         : [];
+    const smtpConfigs = Array.isArray(tables.smtpConfigs)
+      ? tables.smtpConfigs
+      : [];
     const barrier = await this.barrier.acquire();
     try {
       // The shared barrier is checked immediately before every poll, process
@@ -184,6 +187,27 @@ export class BackupService {
                 clientSecretEncrypted: await this.crypto.encryptString(
                   secret,
                   "google-client-secret",
+                ),
+              },
+            });
+          }
+          for (const row of smtpConfigs) {
+            const smtpRow = this.withDates(row);
+            delete smtpRow.passwordPlain;
+            await tx.smtpConfig.upsert({
+              where: { id: row.id },
+              create: {
+                ...smtpRow,
+                passwordEncrypted: await this.crypto.encryptString(
+                  row.passwordPlain,
+                  `smtp-password:${row.id}`,
+                ),
+              },
+              update: {
+                ...smtpRow,
+                passwordEncrypted: await this.crypto.encryptString(
+                  row.passwordPlain,
+                  `smtp-password:${row.id}`,
                 ),
               },
             });
@@ -294,11 +318,17 @@ export class BackupService {
               });
             }
           }
-          for (const row of tables.tasks ?? [])
+          for (const row of tables.tasks ?? []) {
+            const taskRow = this.withDates(row);
+            const sendTransport =
+              row.sendTransport === "SMTP" ? "SMTP" : "MAILBOX_API";
+            taskRow.sendTransport = sendTransport;
+            taskRow.smtpConfigId =
+              sendTransport === "SMTP" ? row.smtpConfigId : null;
             await tx.autoReplyTask.upsert({
               where: { id: row.id },
               create: {
-                ...this.withDates(row),
+                ...taskRow,
                 status: row.status === "DELETED" ? "DELETED" : "PAUSED",
                 pausedAt:
                   row.status === "DELETED"
@@ -307,7 +337,7 @@ export class BackupService {
                 nextPollAt: null,
               },
               update: {
-                ...this.withDates(row),
+                ...taskRow,
                 status: row.status === "DELETED" ? "DELETED" : "PAUSED",
                 pausedAt:
                   row.status === "DELETED"
@@ -316,6 +346,7 @@ export class BackupService {
                 nextPollAt: null,
               },
             });
+          }
           for (const row of tables.rules ?? [])
             await tx.replyRule.upsert({
               where: { id: row.id },
@@ -484,6 +515,7 @@ export class BackupService {
     const [
       microsoftConfigs,
       googleConfigs,
+      smtpConfigs,
       mailboxes,
       tasks,
       cursors,
@@ -505,6 +537,7 @@ export class BackupService {
         Promise.all([
           tx.microsoftAppConfig.findMany(),
           tx.googleAppConfig.findMany(),
+          tx.smtpConfig.findMany(),
           tx.mailbox.findMany(),
           tx.autoReplyTask.findMany(),
           tx.folderCursor.findMany(),
@@ -544,6 +577,15 @@ export class BackupService {
             clientSecretPlain: await this.crypto.decryptString(
               clientSecretEncrypted,
               "google-client-secret",
+            ),
+          })),
+        ),
+        smtpConfigs: await Promise.all(
+          smtpConfigs.map(async ({ passwordEncrypted, ...row }) => ({
+            ...row,
+            passwordPlain: await this.crypto.decryptString(
+              passwordEncrypted,
+              `smtp-password:${row.id}`,
             ),
           })),
         ),
@@ -804,6 +846,8 @@ export class BackupService {
           400,
         );
     }
+    if (tables.smtpConfigs !== undefined && !Array.isArray(tables.smtpConfigs))
+      throw new AppError("BACKUP_INVALID", "备份包含无效的 SMTP 配置表", 400);
 
     const rows = (key: string) => tables[key] as Array<Record<string, any>>;
     const microsoftConfigs = Array.isArray(tables.microsoftConfigs)
@@ -824,6 +868,7 @@ export class BackupService {
         ...(tables.gmailCursors ? ["gmailCursors"] : []),
         ...(tables.microsoftConfigs ? ["microsoftConfigs"] : []),
         ...(tables.googleConfigs ? ["googleConfigs"] : []),
+        ...(tables.smtpConfigs ? ["smtpConfigs"] : []),
       ].flatMap((key) =>
         rows(key).map((row) => `${key}:${String(row.id ?? row.key ?? "")}`),
       ),
@@ -849,6 +894,10 @@ export class BackupService {
     const receiptIds = new Set(rows("receipts").map((row) => row.id));
     const microsoftConfigIds = new Set(microsoftConfigs.map((row) => row.id));
     const googleConfigIds = new Set(googleConfigs.map((row) => row.id));
+    const smtpConfigs = Array.isArray(tables.smtpConfigs)
+      ? rows("smtpConfigs")
+      : [];
+    const smtpConfigIds = new Set(smtpConfigs.map((row) => row.id));
     for (const row of [...microsoftConfigs, ...googleConfigs]) {
       if (
         typeof row.id !== "string" ||
@@ -861,6 +910,31 @@ export class BackupService {
         throw new AppError(
           "BACKUP_PROVIDER_APP_INVALID",
           "备份包含无效的邮箱提供商应用配置",
+          400,
+        );
+    }
+    for (const row of smtpConfigs) {
+      if (
+        typeof row.id !== "string" ||
+        !row.id ||
+        typeof row.name !== "string" ||
+        !row.name.trim() ||
+        typeof row.host !== "string" ||
+        !row.host.trim() ||
+        !Number.isInteger(row.port) ||
+        row.port < 1 ||
+        row.port > 65_535 ||
+        !["TLS", "STARTTLS"].includes(row.security) ||
+        typeof row.username !== "string" ||
+        !row.username.trim() ||
+        typeof row.fromEmail !== "string" ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.fromEmail) ||
+        typeof row.passwordPlain !== "string" ||
+        !row.passwordPlain
+      )
+        throw new AppError(
+          "BACKUP_SMTP_CONFIG_INVALID",
+          "备份包含无效的 SMTP 发件配置",
           400,
         );
     }
@@ -963,6 +1037,21 @@ export class BackupService {
     for (const row of rows("tasks")) {
       requireReference("tasks", row, "mailboxId", mailboxIds);
       requireReference("tasks", row, "defaultTemplateId", templateIds, true);
+      const sendTransport = row.sendTransport ?? "MAILBOX_API";
+      if (!["MAILBOX_API", "SMTP"].includes(sendTransport))
+        throw new AppError(
+          "BACKUP_SEND_TRANSPORT_INVALID",
+          "备份包含不支持的发件通道",
+          400,
+        );
+      if (sendTransport === "SMTP")
+        requireReference("tasks", row, "smtpConfigId", smtpConfigIds);
+      else if (row.smtpConfigId != null)
+        throw new AppError(
+          "BACKUP_REFERENCE_INVALID",
+          "备份关联无效：MAILBOX_API 任务不能绑定 SMTP 配置",
+          400,
+        );
     }
     for (const row of rows("cursors")) {
       requireReference("cursors", row, "mailboxId", mailboxIds);
@@ -1098,6 +1187,7 @@ export class BackupService {
           "nextLinkPlain",
           "secretPlain",
           "dataBase64",
+          "passwordPlain",
         ].includes(key)
       )
         delete clean[key];

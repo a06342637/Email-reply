@@ -132,17 +132,21 @@ export class TemplateController {
     @Body() body: TestSendDto,
     @Req() req: Request,
   ) {
-    const result = await this.testMail.send(
-      id,
-      body.mailboxId,
-      body.recipient,
-      body.variables,
-    );
+    const result = await this.testMail.send(id, {
+      mailboxId: body.mailboxId,
+      smtpConfigId: body.smtpConfigId,
+      recipient: body.recipient,
+      custom: body.variables,
+    });
     await this.audit.write(
       "TEMPLATE_TEST_SENT",
       req,
       { type: "ReplyTemplate", id },
-      { mailboxId: body.mailboxId, recipient: body.recipient },
+      {
+        channel: body.smtpConfigId ? "SMTP" : "MAILBOX_API",
+        mailboxId: body.mailboxId,
+        smtpConfigId: body.smtpConfigId,
+      },
     );
     return result;
   }

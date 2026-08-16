@@ -141,4 +141,54 @@ describe("BackupService provider compatibility", () => {
       googleAppConfigId: null,
     });
   });
+
+  it("accepts an encrypted-backup SMTP config referenced by an SMTP task", () => {
+    const data = payload();
+    (data.tables as any).templates = [
+      {
+        id: "template-1",
+        publishedRevisionId: null,
+      },
+    ];
+    (data.tables as any).smtpConfigs = [
+      {
+        id: "smtp-1",
+        name: "Transactional SMTP",
+        host: "smtp.example.com",
+        port: 587,
+        security: "STARTTLS",
+        username: "service@example.com",
+        passwordPlain: "app-password",
+        fromEmail: "service@example.com",
+      },
+    ];
+    (data.tables as any).tasks = [
+      {
+        id: "task-1",
+        mailboxId: "mailbox-1",
+        defaultTemplateId: "template-1",
+        sendTransport: "SMTP",
+        smtpConfigId: "smtp-1",
+      },
+    ];
+
+    expect(() => (service as any).validatePayload(data)).not.toThrow();
+  });
+
+  it("rejects an SMTP task whose SMTP config is absent from the backup", () => {
+    const data = payload();
+    (data.tables as any).tasks = [
+      {
+        id: "task-1",
+        mailboxId: "mailbox-1",
+        defaultTemplateId: null,
+        sendTransport: "SMTP",
+        smtpConfigId: "missing-smtp",
+      },
+    ];
+
+    expect(() => (service as any).validatePayload(data)).toThrowError(
+      expect.objectContaining({ code: "BACKUP_REFERENCE_INVALID" }),
+    );
+  });
 });

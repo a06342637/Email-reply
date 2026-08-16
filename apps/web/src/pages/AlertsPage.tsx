@@ -2,13 +2,34 @@ import { useCallback, useEffect, useState } from "react";
 import { BellRing, Check } from "lucide-react";
 import { api, json } from "../api";
 import { useApp } from "../app-context";
-import { Card, Empty, Loading, PageHeader, Status, fmtDate } from "../ui";
+import {
+  Card,
+  Empty,
+  Loading,
+  PageHeader,
+  Pagination,
+  Status,
+  fmtDate,
+} from "../ui";
 export function AlertsPage() {
   const { notify } = useApp();
-  const [data, setData] = useState<any[]>();
+  const [data, setData] = useState<{
+    items: any[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }>();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [status, setStatus] = useState("");
   const load = useCallback(async () => {
-    setData(await api("/api/v1/alerts"));
-  }, []);
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    if (status) params.set("status", status);
+    setData(await api(`/api/v1/alerts?${params.toString()}`));
+  }, [page, pageSize, status]);
   useEffect(() => {
     void load();
     const events = new EventSource("/api/v1/events");
@@ -31,8 +52,27 @@ export function AlertsPage() {
         title="告警中心"
         description="授权失效、持续限流、熔断、Worker 和发送不确定状态。"
       />
+      <Card>
+        <div className="filters">
+          <label>
+            状态
+            <select
+              value={status}
+              onChange={(event) => {
+                setStatus(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">全部状态</option>
+              <option value="OPEN">未处理</option>
+              <option value="ACKNOWLEDGED">已确认</option>
+              <option value="RESOLVED">已恢复</option>
+            </select>
+          </label>
+        </div>
+      </Card>
       <div className="alert-list">
-        {data.map((a) => (
+        {data.items.map((a) => (
           <Card key={a.id} className={`alert-card ${a.severity.toLowerCase()}`}>
             <div className="alert-icon">
               <BellRing />
@@ -57,7 +97,7 @@ export function AlertsPage() {
           </Card>
         ))}
       </div>
-      {!data.length && (
+      {!data.items.length && (
         <Card>
           <Empty>
             <BellRing size={38} />
@@ -66,6 +106,18 @@ export function AlertsPage() {
           </Empty>
         </Card>
       )}
+      <Card>
+        <Pagination
+          page={data.page}
+          pageSize={data.pageSize}
+          total={data.total}
+          onPageChange={setPage}
+          onPageSizeChange={(value) => {
+            setPageSize(value);
+            setPage(1);
+          }}
+        />
+      </Card>
     </>
   );
 }

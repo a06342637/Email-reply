@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -10,6 +10,10 @@ const compose = readFileSync(
   fileURLToPath(new URL("../../../../compose.yml", import.meta.url)),
   "utf8",
 );
+const dockerignore = readFileSync(
+  fileURLToPath(new URL("../../../../.dockerignore", import.meta.url)),
+  "utf8",
+);
 const updateScript = readFileSync(
   fileURLToPath(new URL("../../../../update.sh", import.meta.url)),
   "utf8",
@@ -18,6 +22,9 @@ const updaterSource = readFileSync(
   fileURLToPath(new URL("../updater.ts", import.meta.url)),
   "utf8",
 );
+const migrationsDirectory = fileURLToPath(
+  new URL("../../../../prisma/migrations/", import.meta.url),
+);
 
 describe("updater container packaging", () => {
   it("keeps Buildx state on the writable tmpfs of the read-only container", () => {
@@ -25,6 +32,26 @@ describe("updater container packaging", () => {
     expect(dockerfile).toContain("DOCKER_CONFIG=/tmp/docker");
     expect(compose).toContain("DOCKER_CONFIG: /tmp/docker");
     expect(compose).toContain("/tmp:size=128m,mode=1777");
+  });
+
+  it("excludes TypeScript incremental caches that can suppress clean Docker emits", () => {
+    expect(dockerignore).toContain("**/*.tsbuildinfo");
+  });
+
+  it("does not package empty Prisma migration directories", () => {
+    const migrationDirectories = readdirSync(migrationsDirectory, {
+      withFileTypes: true,
+    }).filter((entry) => entry.isDirectory());
+
+    expect(migrationDirectories.length).toBeGreaterThan(0);
+    for (const migrationDirectory of migrationDirectories) {
+      expect(
+        existsSync(
+          `${migrationsDirectory}/${migrationDirectory.name}/migration.sql`,
+        ),
+        `${migrationDirectory.name} must contain migration.sql`,
+      ).toBe(true);
+    }
   });
 
   it("restricts command-line updates to the official origin and main branch", () => {

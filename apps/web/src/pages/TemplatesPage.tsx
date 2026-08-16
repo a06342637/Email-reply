@@ -19,12 +19,13 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import { api, json } from "../api";
 import { useApp } from "../app-context";
-import type { Asset, Mailbox, Template } from "../types";
+import type { Asset, Mailbox, SmtpConfig, Template } from "../types";
 import {
   Card,
   Empty,
   Loading,
   Modal,
+  Notice,
   PageHeader,
   fmtDate,
   fmtBytes,
@@ -48,14 +49,17 @@ export function TemplatesPage() {
   const { notify } = useApp();
   const [data, setData] = useState<Template[]>();
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
+  const [smtpConfigs, setSmtpConfigs] = useState<SmtpConfig[]>([]);
   const [edit, setEdit] = useState<Template | null | undefined>();
   async function load() {
-    const [t, m] = await Promise.all([
+    const [t, m, smtp] = await Promise.all([
       api<Template[]>("/api/v1/templates"),
       api<Mailbox[]>("/api/v1/mailboxes"),
+      api<SmtpConfig[]>("/api/v1/smtp/configs"),
     ]);
     setData(t);
     setMailboxes(m);
+    setSmtpConfigs(smtp);
   }
   useEffect(() => {
     void load();
@@ -77,7 +81,27 @@ export function TemplatesPage() {
       notify("模板已永久删除");
       await load();
     } catch (error) {
-      notify(error instanceof Error ? error.message : "删除模板失败", "danger");
+      const failure = error as Error & {
+        details?: {
+          tasks?: Array<{ name?: string }>;
+          rules?: Array<{ name?: string; task?: { name?: string } }>;
+        };
+      };
+      const references = [
+        ...(failure.details?.tasks ?? []).map(
+          (task) => `任务：${task.name || "未命名任务"}`,
+        ),
+        ...(failure.details?.rules ?? []).map(
+          (rule) =>
+            `规则：${rule.task?.name || "未命名任务"} / ${rule.name || "未命名规则"}`,
+        ),
+      ];
+      notify(
+        `${failure instanceof Error ? failure.message : "删除模板失败"}${
+          references.length ? `；仍被引用：${references.join("、")}` : ""
+        }`,
+        "danger",
+      );
     }
   }
   async function duplicate(id: string) {
@@ -168,6 +192,7 @@ export function TemplatesPage() {
         <TemplateEditor
           initial={edit}
           mailboxes={mailboxes}
+          smtpConfigs={smtpConfigs}
           onClose={() => setEdit(undefined)}
           onSaved={async () => {
             setEdit(undefined);
@@ -182,14 +207,17 @@ export function TemplatesPage() {
 function TemplateEditor({
   initial,
   mailboxes,
+  smtpConfigs,
   onClose,
   onSaved,
 }: {
   initial: Template | null;
   mailboxes: Mailbox[];
+  smtpConfigs: SmtpConfig[];
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { notify } = useApp();
   const full = initial;
   const latest = full?.revisions?.[0];
   const [name, setName] = useState(full?.name || "");
@@ -202,6 +230,9 @@ function TemplateEditor({
       "<p>您好，{{ sender.name }}：</p><p>我们已经收到您关于“<strong>{{ message.subject }}</strong>”的邮件，会尽快处理。</p><p>此致<br>{{ mailbox.name }}</p>",
   );
   const [text, setText] = useState(latest?.textContent || "");
+  const [autoTextContent, setAutoTextContent] = useState(
+    latest?.autoTextContent !== false,
+  );
   const [mode, setMode] = useState<"rich" | "html">("rich");
   const [preview, setPreview] = useState<any>();
   const [busy, setBusy] = useState(false);
@@ -227,6 +258,7 @@ function TemplateEditor({
           subjectTemplate: subject,
           htmlContent: html,
           textContent: text || undefined,
+          autoTextContent,
           variables: sample,
         }),
       ),
@@ -245,6 +277,7 @@ function TemplateEditor({
             subjectTemplate: subject,
             htmlContent: html,
             textContent: text || undefined,
+            autoTextContent,
           }),
         );
         id = r.id;
@@ -257,10 +290,13 @@ function TemplateEditor({
             subjectTemplate: subject,
             htmlContent: html,
             textContent: text || undefined,
+            autoTextContent,
           }),
         );
       if (publish) await api(`/api/v1/templates/${id}/publish`, json("POST"));
       onSaved();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "模板保存失败", "danger");
     } finally {
       setBusy(false);
     }
@@ -387,12 +423,29 @@ function TemplateEditor({
               ))}
             </div>
           </div>
+          <label className="checkbox-line">
+            <input
+              type="checkbox"
+              checked={autoTextContent}
+              onChange={(event) => setAutoTextContent(event.target.checked)}
+            />
+            自动根据 HTML 生成并同步纯文本版本（推荐）
+          </label>
           <label>
-            纯文本版本 <small>留空自动从 HTML 生成</small>
+            纯文本版本
+            <small>
+              {autoTextContent
+                ? "发送时自动生成，可避免富文本与纯文本内容不一致"
+                : "已启用手工编辑，请确保内容与 HTML 含义一致"}
+            </small>
             <textarea
               rows={4}
               value={text}
               onChange={(e) => setText(e.target.value)}
+              disabled={autoTextContent}
+              placeholder={
+                autoTextContent ? "将由系统自动生成" : "输入纯文本正文"
+              }
             />
           </label>
           {full && latest && !latest.publishedAt && (
@@ -496,6 +549,16 @@ function TemplateEditor({
               }}
             />
           </div>
+          {preview?.warnings?.length ? (
+            <Notice kind="danger">
+              <strong>投递风险提示</strong>
+              <ul>
+                {preview.warnings.map((warning: string) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            </Notice>
+          ) : null}
         </div>
       </div>
       <div className="modal-actions split">
@@ -504,12 +567,14 @@ function TemplateEditor({
             <Eye />
             预览
           </button>
-          {full && mailboxes.some((m) => m.status === "CONNECTED") && (
-            <button onClick={() => setTest(true)}>
-              <FlaskConical />
-              测试发送
-            </button>
-          )}
+          {full &&
+            (mailboxes.some((m) => m.status === "CONNECTED") ||
+              smtpConfigs.length > 0) && (
+              <button onClick={() => setTest(true)}>
+                <FlaskConical />
+                测试发送
+              </button>
+            )}
         </div>
         <div>
           <button onClick={onClose}>取消</button>
@@ -529,6 +594,7 @@ function TemplateEditor({
         <TestModal
           template={full}
           mailboxes={mailboxes}
+          smtpConfigs={smtpConfigs}
           onClose={() => setTest(false)}
         />
       )}
@@ -538,28 +604,46 @@ function TemplateEditor({
 function TestModal({
   template,
   mailboxes,
+  smtpConfigs,
   onClose,
 }: {
   template: Template;
   mailboxes: Mailbox[];
+  smtpConfigs: SmtpConfig[];
   onClose: () => void;
 }) {
-  const [mailboxId, setMailbox] = useState(
-    mailboxes.find((m) => m.status === "CONNECTED")?.id || "",
+  const { notify } = useApp();
+  const [channel, setChannel] = useState(
+    mailboxes.find((m) => m.status === "CONNECTED")
+      ? `mailbox:${mailboxes.find((m) => m.status === "CONNECTED")!.id}`
+      : smtpConfigs[0]
+        ? `smtp:${smtpConfigs[0].id}`
+        : "",
   );
   const [recipient, setRecipient] = useState("");
   const [busy, setBusy] = useState(false);
   async function send() {
     setBusy(true);
     try {
-      await api(
+      const result = await api<{ warnings?: string[] }>(
         `/api/v1/templates/${template.id}/test-send`,
-        json("POST", { mailboxId, recipient }),
+        json("POST", {
+          ...(channel.startsWith("smtp:")
+            ? { smtpConfigId: channel.slice(5) }
+            : { mailboxId: channel.slice(8) }),
+          recipient,
+        }),
       );
       alert(
-        "邮件服务商已接受测试邮件；这不代表目标邮箱已经最终投递，请继续检查目标邮箱并留意延迟或拦截。",
+        `邮件服务商已接受测试邮件；这不代表目标邮箱已经最终投递，请继续检查目标邮箱并留意延迟或拦截。${
+          result.warnings?.length
+            ? `\n\n投递风险提示：\n- ${result.warnings.join("\n- ")}`
+            : ""
+        }`,
       );
       onClose();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "测试发送失败", "danger");
     } finally {
       setBusy(false);
     }
@@ -567,15 +651,20 @@ function TestModal({
   return (
     <Modal title="真实测试发送" onClose={onClose}>
       <label>
-        发件邮箱
-        <select value={mailboxId} onChange={(e) => setMailbox(e.target.value)}>
+        发件通道
+        <select value={channel} onChange={(e) => setChannel(e.target.value)}>
           {mailboxes
             .filter((m) => m.status === "CONNECTED")
             .map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.email}
+              <option key={m.id} value={`mailbox:${m.id}`}>
+                邮箱 API · {m.email}
               </option>
             ))}
+          {smtpConfigs.map((config) => (
+            <option key={config.id} value={`smtp:${config.id}`}>
+              SMTP · {config.name} · {config.fromEmail}
+            </option>
+          ))}
         </select>
       </label>
       <label>
@@ -591,7 +680,7 @@ function TestModal({
         <button
           className="primary"
           onClick={send}
-          disabled={busy || !recipient}
+          disabled={busy || !recipient || !channel}
         >
           <Send />
           发送测试

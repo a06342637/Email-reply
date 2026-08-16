@@ -3,7 +3,15 @@ import { Download, RefreshCw, RotateCcw } from "lucide-react";
 import { api, json } from "../api";
 import { useApp } from "../app-context";
 import type { ProcessingLog } from "../types";
-import { Card, Loading, Notice, PageHeader, Status, fmtDate } from "../ui";
+import {
+  Card,
+  Loading,
+  Notice,
+  PageHeader,
+  Pagination,
+  Status,
+  fmtDate,
+} from "../ui";
 export function LogsPage() {
   const { notify } = useApp();
   const [data, setData] = useState<{
@@ -18,12 +26,13 @@ export function LogsPage() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const queryParams = useCallback(
     (includePage = true) => {
       const value = new URLSearchParams();
       if (includePage) {
         value.set("page", String(page));
-        value.set("pageSize", "50");
+        value.set("pageSize", String(pageSize));
       }
       if (status) value.set("status", status);
       if (sender) value.set("sender", sender);
@@ -32,7 +41,7 @@ export function LogsPage() {
       if (to) value.set("to", to);
       return value;
     },
-    [from, page, sender, status, subject, to],
+    [from, page, pageSize, sender, status, subject, to],
   );
   const load = useCallback(async () => {
     setData(await api(`/api/v1/processing-logs?${queryParams().toString()}`));
@@ -72,8 +81,9 @@ export function LogsPage() {
         }
       />
       <Notice>
-        “服务商已接受”表示 Microsoft Graph 或 Gmail API
-        已确认邮件进入发件邮箱的“已发送”目录，不等于目标邮箱已经投递。最终投递仍可能受对方反垃圾策略、地址规则或提供商延迟影响。
+        “服务商已接受”表示 Microsoft Graph / Gmail API
+        已确认邮件进入“已发送”目录，或 SMTP
+        服务器已接受邮件数据；两种情况都不等于目标邮箱已经最终投递。最终投递仍可能受对方反垃圾策略、地址规则、域名信誉或提供商延迟影响。
       </Notice>
       <Card>
         <div className="filters log-filters">
@@ -193,20 +203,16 @@ export function LogsPage() {
             </tbody>
           </table>
         </div>
-        <div className="pagination">
-          <button disabled={page <= 1} onClick={() => setPage(page - 1)}>
-            上一页
-          </button>
-          <span>
-            第 {page} / {Math.max(1, Math.ceil(data.total / data.pageSize))} 页
-          </span>
-          <button
-            disabled={page * data.pageSize >= data.total}
-            onClick={() => setPage(page + 1)}
-          >
-            下一页
-          </button>
-        </div>
+        <Pagination
+          page={data.page}
+          pageSize={data.pageSize}
+          total={data.total}
+          onPageChange={setPage}
+          onPageSizeChange={(value) => {
+            setPageSize(value);
+            setPage(1);
+          }}
+        />
       </Card>
     </>
   );

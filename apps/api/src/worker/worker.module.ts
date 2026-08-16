@@ -11,6 +11,7 @@ import { WorkerRunnerService } from "./worker-runner.service.js";
 import { BackupModule } from "../backup/backup.module.js";
 import { GmailPollService } from "./gmail-poll.service.js";
 import { ProviderPollService } from "./provider-poll.service.js";
+import { SmtpModule } from "../smtp/smtp.module.js";
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { ProviderPollService } from "./provider-poll.service.js";
     TemplateModule,
     ObservabilityModule,
     BackupModule,
+    SmtpModule,
   ],
   providers: [
     FilterService,

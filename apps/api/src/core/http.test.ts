@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GlobalExceptionFilter } from "./http.js";
+import { ProviderApiError } from "../providers/provider-api.error.js";
 
 function fixture() {
   const response = {
@@ -58,6 +59,29 @@ describe("GlobalExceptionFilter", () => {
         message: "请求内容超过允许大小",
         requestId: "request-1",
       },
+    });
+  });
+
+  it("explains when Microsoft has suspended mailbox sending", () => {
+    const { filter, response, host } = fixture();
+
+    filter.catch(
+      new ProviderApiError(
+        "MICROSOFT",
+        403,
+        "ErrorAccountSuspend",
+        "Account suspended; WASCL actual verdict is Suspend",
+      ),
+      host as never,
+    );
+
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(response.json).toHaveBeenCalledWith({
+      error: expect.objectContaining({
+        code: "MICROSOFT_ACCOUNT_SUSPENDED",
+        message: expect.stringContaining("Outlook 网页版"),
+        requestId: "request-1",
+      }),
     });
   });
 });

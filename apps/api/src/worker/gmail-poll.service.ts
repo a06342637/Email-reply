@@ -222,7 +222,7 @@ export class GmailPollService {
       update: {},
     });
     if (!cursor.historyIdEncrypted) {
-      await this.initialize(task);
+      await this.initialize(task, cursor.highWaterAt);
       return;
     }
     if (!cursor.initializedAt) {
@@ -320,14 +320,17 @@ export class GmailPollService {
     }
   }
 
-  private async initialize(task: TaskPayload): Promise<void> {
+  private async initialize(
+    task: TaskPayload,
+    resumeFrom: Date | null,
+  ): Promise<void> {
     const profile = await this.gmail.request<GmailProfile>(
       task.mailboxId,
       "/profile",
       {},
       { maxRetries: 3, expected: [200] },
     );
-    const from = task.activationAt ?? new Date();
+    const from = resumeFrom ?? task.activationAt ?? new Date();
     await this.prisma.gmailCursor.update({
       where: { mailboxId: task.mailboxId },
       data: {

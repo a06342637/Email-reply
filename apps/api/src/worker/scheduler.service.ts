@@ -7,12 +7,18 @@ import { ProviderPollService } from "./provider-poll.service.js";
 import { OutboxDispatcherService, QueueService } from "./queue.service.js";
 import { AlertService } from "../observability/alert.service.js";
 import { RestoreBarrierService } from "../backup/restore-barrier.service.js";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 @Injectable()
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private stopping = false;
   private readonly heldLocks = new Set<string>();
-  private lastCleanupAt = 0;
+  private lastCleanupDay = "";
 
   constructor(
     private readonly prisma: PrismaService,
@@ -112,12 +118,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           await sleep(1_000);
           continue;
         }
-        if (
-          !this.lastCleanupAt ||
-          Date.now() - this.lastCleanupAt >= 24 * 60 * 60_000
-        ) {
+        const cleanupDay = await this.cleanupDayKey();
+        if (this.lastCleanupDay !== cleanupDay) {
           await this.cleanup();
-          this.lastCleanupAt = Date.now();
+          this.lastCleanupDay = cleanupDay;
         }
         await this.checkSecretExpiry();
       } catch (error) {
@@ -137,6 +141,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             "alertLogDays",
             "auditLogDays",
             "dedupeDays",
+            "timezone",
           ],
         },
       },
@@ -144,8 +149,19 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     const values = new Map(
       settings.map((item) => [item.key, Number(item.value)]),
     );
+    const configuredTimezone = settings.find(
+      (item) => item.key === "timezone",
+    )?.value;
+    const zone =
+      typeof configuredTimezone === "string"
+        ? configuredTimezone
+        : this.config.timezone;
     const cutoff = (days: number) =>
-      new Date(Date.now() - Math.min(3650, Math.max(1, days)) * 86_400_000);
+      dayjs()
+        .tz(zone)
+        .startOf("day")
+        .subtract(Math.min(3650, Math.max(1, days)) - 1, "day")
+        .toDate();
     await this.prisma.processingLog.deleteMany({
       where: {
         occurredAt: { lt: cutoff(values.get("processingLogDays") || 30) },
@@ -160,12 +176,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       USING "Alert" AS alert
       WHERE outbox."aggregateId" = alert."id"
         AND outbox."kind" = 'WEBHOOK'
-        AND alert."status" = 'RESOLVED'
         AND alert."lastSeenAt" < ${alertCutoff}
     `;
     await this.prisma.alert.deleteMany({
       where: {
-        status: "RESOLVED",
         lastSeenAt: { lt: alertCutoff },
       },
     });
@@ -220,6 +234,16 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           )
         )
     `;
+  }
+
+  private async cleanupDayKey(): Promise<string> {
+    const setting = await this.prisma.systemSetting.findUnique({
+      where: { key: "timezone" },
+      select: { value: true },
+    });
+    const zone =
+      typeof setting?.value === "string" ? setting.value : this.config.timezone;
+    return dayjs().tz(zone).format("YYYY-MM-DD");
   }
 
   private async checkSecretExpiry(): Promise<void> {

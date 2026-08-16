@@ -1,6 +1,6 @@
 {
   "name": "@autoreply/api",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "private": true,
   "type": "module",
   "scripts": {
@@ -31,6 +31,7 @@
     "libsodium-wrappers-sumo": "0.7.15",
     "liquidjs": "^10.21.1",
     "nanoid": "^5.1.5",
+    "nodemailer": "^9.0.5",
     "otplib": "^12.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
@@ -44,6 +45,7 @@
     "@types/libsodium-wrappers-sumo": "^0.7.8",
     "@types/multer": "^2.0.0",
     "@types/node": "^24.3.0",
+    "@types/nodemailer": "^8.0.1",
     "@types/sanitize-html": "^2.16.0",
     "tsx": "^4.20.5",
     "vitest": "^3.2.4"

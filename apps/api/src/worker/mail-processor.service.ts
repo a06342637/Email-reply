@@ -9,6 +9,10 @@ import { AlertService } from "../observability/alert.service.js";
 import { ProviderApiError } from "../providers/provider-api.error.js";
 import { RestoreBarrierService } from "../backup/restore-barrier.service.js";
 import { AppError } from "../core/http.js";
+import {
+  SmtpDeliveryError,
+  SmtpDeliveryService,
+} from "../smtp/smtp-delivery.service.js";
 
 const VERIFY_DELAYS_SECONDS = [15, 60, 300];
 
@@ -21,6 +25,7 @@ export class MailProcessorService {
     private readonly transport: MailProviderService,
     private readonly alerts: AlertService,
     private readonly restoreBarrier: RestoreBarrierService,
+    private readonly smtp: SmtpDeliveryService,
   ) {}
 
   async process(receiptId: string): Promise<void> {
@@ -41,7 +46,12 @@ export class MailProcessorService {
       const attemptNumber =
         (await tx.replyAttempt.count({ where: { receiptId } })) + 1;
       return tx.replyAttempt.create({
-        data: { receiptId, number: attemptNumber, state: "CREATING_DRAFT" },
+        data: {
+          receiptId,
+          number: attemptNumber,
+          state: "CREATING_DRAFT",
+          transport: initial.task.sendTransport,
+        },
       });
     });
     if (!attempt) return;
@@ -102,6 +112,10 @@ export class MailProcessorService {
               }
             : { state: "QUEUED" },
       });
+      return;
+    }
+    if (receipt.task.sendTransport === "SMTP") {
+      await this.processSmtp(receipt, attempt.id, rendered);
       return;
     }
     let draftId: string | undefined;
@@ -249,6 +263,44 @@ export class MailProcessorService {
       receipt.mailbox.status !== "CONNECTED"
     )
       return;
+
+    if (attempt.transport === "SMTP") {
+      if (!attempt.smtpSendStartedAt) {
+        await this.prisma.$transaction([
+          this.prisma.replyAttempt.update({
+            where: { id: attempt.id },
+            data: {
+              state: "FAILED_CONFIRMED",
+              errorCode: "SMTP_SEND_NOT_STARTED",
+              errorMessage:
+                "Worker 中断发生在 SMTP 发送开始之前，已安全重新排队",
+              verifiedAt: new Date(),
+            },
+          }),
+          this.prisma.messageReceipt.update({
+            where: { id: receipt.id },
+            data: { state: "QUEUED" },
+          }),
+          this.prisma.transactionalOutbox.upsert({
+            where: { dedupeKey: `smtp-recovery:${receipt.id}:${attempt.id}` },
+            create: {
+              kind: "PROCESS_MESSAGE",
+              aggregateId: receipt.id,
+              dedupeKey: `smtp-recovery:${receipt.id}:${attempt.id}`,
+              payload: { receiptId: receipt.id } as Prisma.InputJsonValue,
+            },
+            update: {},
+          }),
+        ]);
+      } else
+        await this.markUncertain(
+          receipt.id,
+          attempt.id,
+          "SMTP_SEND_STATUS_UNCERTAIN",
+          "Worker 在 SMTP 服务器响应持久化前中断，无法安全确认邮件是否已经被服务器接受",
+        );
+      return;
+    }
 
     if (
       phase === "CREATE" &&
@@ -445,6 +497,79 @@ export class MailProcessorService {
     });
   }
 
+  private async processSmtp(
+    receipt: NonNullable<
+      Awaited<ReturnType<MailProcessorService["loadReceipt"]>>
+    >,
+    attemptId: string,
+    rendered: Awaited<ReturnType<TemplateService["renderForReply"]>>,
+  ): Promise<void> {
+    if (!receipt.task.smtpConfigId) {
+      await this.failConfirmed(
+        receipt.id,
+        "SMTP_CONFIG_REQUIRED",
+        "任务没有可用的 SMTP 发件配置",
+        attemptId,
+      );
+      return;
+    }
+    const startedAt = new Date();
+    await this.prisma.$transaction([
+      this.prisma.replyAttempt.update({
+        where: { id: attemptId },
+        data: {
+          state: "SENDING",
+          transport: "SMTP",
+          smtpSendStartedAt: startedAt,
+        },
+      }),
+      this.prisma.messageReceipt.update({
+        where: { id: receipt.id },
+        data: { state: "SENDING" },
+      }),
+    ]);
+    try {
+      const result = await this.smtp.sendReply({
+        smtpConfigId: receipt.task.smtpConfigId,
+        recipient: receipt.replyToEmail || receipt.senderEmail,
+        replyToFallback: receipt.mailbox.email,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+        assets: rendered.assets,
+        sourceInternetMessageId: receipt.internetMessageId,
+        trackingId: receipt.trackingId,
+        instanceId: await this.instanceId(),
+      });
+      await this.prisma.replyAttempt.update({
+        where: { id: attemptId },
+        data: {
+          sentAcceptedAt: new Date(),
+          draftInternetId: result.messageId,
+        },
+      });
+      await this.markSent(receipt.id, attemptId, result.messageId);
+    } catch (error) {
+      if (error instanceof SmtpDeliveryError && !error.uncertain) {
+        await this.failConfirmed(
+          receipt.id,
+          error.code,
+          error.message,
+          attemptId,
+        );
+        return;
+      }
+      await this.markUncertain(
+        receipt.id,
+        attemptId,
+        error instanceof SmtpDeliveryError
+          ? error.code
+          : "SMTP_SEND_STATUS_UNCERTAIN",
+        error instanceof Error ? error.message : "SMTP 发送状态无法确认",
+      );
+    }
+  }
+
   private async variables(
     receipt: NonNullable<
       Awaited<ReturnType<MailProcessorService["loadReceipt"]>>
@@ -534,6 +659,7 @@ export class MailProcessorService {
       where: { id: receiptId },
       include: {
         mailbox: true,
+        task: true,
         templateRevision: { include: { template: true } },
         rule: true,
       },
@@ -570,9 +696,11 @@ export class MailProcessorService {
           templateName: receipt.templateRevision?.template.name,
           status: "SENT",
           reason:
-            receipt.mailbox.provider === "GOOGLE"
-              ? "Gmail API 已确认邮件进入已发送；这不是目标邮箱的最终送达回执"
-              : "Microsoft Graph 已确认邮件进入已发送邮件；这不是目标邮箱的最终送达回执",
+            receipt.task.sendTransport === "SMTP"
+              ? "SMTP 服务器已接受邮件；这不是目标邮箱的最终送达回执"
+              : receipt.mailbox.provider === "GOOGLE"
+                ? "Gmail API 已确认邮件进入已发送；这不是目标邮箱的最终送达回执"
+                : "Microsoft Graph 已确认邮件进入已发送邮件；这不是目标邮箱的最终送达回执",
         },
       });
       return true;
@@ -630,6 +758,31 @@ export class MailProcessorService {
         },
       }),
     ]);
+    if (
+      /ErrorAccountSuspend|MICROSOFT_ACCOUNT_SUSPENDED/i.test(code) ||
+      /Account suspended|verdict is Suspend/i.test(message)
+    ) {
+      await this.prisma.autoReplyTask.updateMany({
+        where: {
+          id: receipt.taskId,
+          status: { in: ["RUNNING", "INITIALIZING"] },
+        },
+        data: { status: "PAUSED", pausedAt: new Date(), nextPollAt: null },
+      });
+      await this.alerts.open({
+        fingerprint: `mailbox-send-suspended:${receipt.mailboxId}`,
+        type: "MICROSOFT_ACCOUNT_SUSPENDED",
+        severity: "CRITICAL",
+        title: "Microsoft 邮箱发信能力已暂停",
+        message:
+          "Microsoft 已限制此邮箱发信，自动回复任务已暂停。请登录 Outlook 网页版按收件箱提示验证账户，或把任务改为 SMTP 发件后恢复。",
+        metadata: {
+          mailboxId: receipt.mailboxId,
+          taskId: receipt.taskId,
+          code,
+        },
+      });
+    }
   }
 
   private async markUncertain(

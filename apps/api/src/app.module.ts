@@ -13,6 +13,7 @@ import { HealthController } from "./health/health.controller.js";
 import { BootstrapService } from "./bootstrap.service.js";
 import { AppMonitorService } from "./observability/app-monitor.service.js";
 import { UpdateModule } from "./updates/update.module.js";
+import { SmtpModule } from "./smtp/smtp.module.js";
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { UpdateModule } from "./updates/update.module.js";
     SettingsModule,
     BackupModule,
     UpdateModule,
+    SmtpModule,
     ServeStaticModule.forRoot({
       rootPath: join(process.cwd(), "apps/web/dist"),
       exclude: ["/api/{*path}", "/health/{*path}"],

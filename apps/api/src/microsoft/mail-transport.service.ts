@@ -85,27 +85,32 @@ export class MailTransportService {
 
   async createTestDraft(input: {
     mailboxId: string;
+    mailboxEmail: string;
     recipient: string;
     subject: string;
     html: string;
+    text: string;
     trackingId: string;
     instanceId: string;
   }): Promise<GraphMessage> {
+    const mime = this.alternativeMime({
+      mailboxEmail: input.mailboxEmail,
+      recipient: input.recipient,
+      subject: `[自动回复模板测试] ${input.subject}`,
+      text: input.text,
+      html: input.html,
+      trackingId: input.trackingId,
+      instanceId: input.instanceId,
+      autoSubmitted: "auto-generated",
+      replySubject: false,
+    });
     return this.graph.request<GraphMessage>(
       input.mailboxId,
       "/me/messages",
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          subject: `[自动回复模板测试] ${input.subject}`,
-          body: { contentType: "HTML", content: input.html },
-          toRecipients: [{ emailAddress: { address: input.recipient } }],
-          internetMessageHeaders: this.trackingHeaders(
-            input.trackingId,
-            input.instanceId,
-          ),
-        }),
+        headers: { "content-type": "text/plain; charset=utf-8" },
+        body: mime,
       },
       { maxRetries: 0, expected: [201] },
     );
@@ -372,14 +377,6 @@ export class MailTransportService {
     );
   }
 
-  private trackingHeaders(trackingId: string, instanceId: string) {
-    return [
-      { name: "X-Auto-Response-Suppress", value: "All" },
-      { name: "X-AutoReply-Tracking", value: trackingId },
-      { name: "X-AutoReply-Instance", value: instanceId },
-    ];
-  }
-
   private replyMime(
     mailboxEmail: string,
     recipient: string,
@@ -389,6 +386,30 @@ export class MailTransportService {
     trackingId: string,
     instanceId: string,
   ): string {
+    return this.alternativeMime({
+      mailboxEmail,
+      recipient,
+      subject,
+      text,
+      html,
+      trackingId,
+      instanceId,
+      autoSubmitted: "auto-replied",
+      replySubject: true,
+    });
+  }
+
+  private alternativeMime(input: {
+    mailboxEmail: string;
+    recipient: string;
+    subject: string;
+    text: string;
+    html: string;
+    trackingId: string;
+    instanceId: string;
+    autoSubmitted: "auto-generated" | "auto-replied";
+    replySubject: boolean;
+  }): string {
     const boundary = `=_MailPilot_${randomUUID().replace(/-/g, "")}`;
     const safeHeader = (value: string) => value.replace(/[\r\n]/g, " ");
     const encodePart = (value: string) => {
@@ -396,36 +417,38 @@ export class MailTransportService {
       return encoded.match(/.{1,76}/g)?.join("\r\n") ?? "";
     };
     const mime = [
-      `From: ${safeHeader(mailboxEmail)}`,
-      `To: ${safeHeader(recipient)}`,
-      `Subject: ${this.mimeSubject(subject)}`,
+      `From: ${safeHeader(input.mailboxEmail)}`,
+      `To: ${safeHeader(input.recipient)}`,
+      `Subject: ${this.mimeSubject(input.subject, input.replySubject)}`,
       "MIME-Version: 1.0",
-      "Auto-Submitted: auto-replied",
+      `Auto-Submitted: ${input.autoSubmitted}`,
       "X-Auto-Response-Suppress: All",
-      `X-AutoReply-Tracking: ${safeHeader(trackingId)}`,
-      `X-AutoReply-Instance: ${safeHeader(instanceId)}`,
+      `X-AutoReply-Tracking: ${safeHeader(input.trackingId)}`,
+      `X-AutoReply-Instance: ${safeHeader(input.instanceId)}`,
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       "",
       `--${boundary}`,
       "Content-Type: text/plain; charset=UTF-8",
       "Content-Transfer-Encoding: base64",
       "",
-      encodePart(text),
+      encodePart(input.text),
       `--${boundary}`,
       "Content-Type: text/html; charset=UTF-8",
       "Content-Transfer-Encoding: base64",
       "",
-      encodePart(html),
+      encodePart(input.html),
       `--${boundary}--`,
       "",
     ].join("\r\n");
     return Buffer.from(mime, "utf8").toString("base64");
   }
 
-  private mimeSubject(subject: string): string {
+  private mimeSubject(subject: string, reply = true): string {
     const normalized = subject.replace(/[\r\n]+/g, " ").trim();
     const replySubject = Array.from(
-      /^(re|回复):/i.test(normalized) ? normalized : `Re: ${normalized}`,
+      reply && !/^(re|回复):/i.test(normalized)
+        ? `Re: ${normalized}`
+        : normalized,
     )
       .slice(0, 900)
       .join("");

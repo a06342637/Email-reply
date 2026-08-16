@@ -143,7 +143,12 @@ export class TemplateService {
             },
           },
         },
-        _count: { select: { rules: true, defaultForTasks: true } },
+        _count: {
+          select: {
+            rules: { where: { task: { status: { not: "DELETED" } } } },
+            defaultForTasks: { where: { status: { not: "DELETED" } } },
+          },
+        },
       },
       orderBy: { updatedAt: "desc" },
     });
@@ -179,6 +184,7 @@ export class TemplateService {
     subjectTemplate: string;
     htmlContent: string;
     textContent?: string;
+    autoTextContent?: boolean;
   }) {
     const name = input.name.trim();
     if (!name)
@@ -189,7 +195,10 @@ export class TemplateService {
       sanitized,
       input.textContent ?? "",
     );
-    const textContent = input.textContent?.trim() || this.toText(sanitized);
+    const autoTextContent = input.autoTextContent !== false;
+    const textContent = autoTextContent
+      ? this.toText(sanitized)
+      : input.textContent?.trim() || this.toText(sanitized);
     return this.prisma.replyTemplate.create({
       data: {
         name,
@@ -201,6 +210,7 @@ export class TemplateService {
             htmlContent: input.htmlContent,
             sanitizedHtml: sanitized,
             textContent,
+            autoTextContent,
           },
         },
       },
@@ -216,6 +226,7 @@ export class TemplateService {
       subjectTemplate: string;
       htmlContent: string;
       textContent?: string;
+      autoTextContent?: boolean;
     },
   ) {
     const name = input.name?.trim();
@@ -233,7 +244,10 @@ export class TemplateService {
     });
     const latest = template.revisions[0];
     const sanitized = this.sanitize(input.htmlContent);
-    const textContent = input.textContent?.trim() || this.toText(sanitized);
+    const autoTextContent = input.autoTextContent !== false;
+    const textContent = autoTextContent
+      ? this.toText(sanitized)
+      : input.textContent?.trim() || this.toText(sanitized);
     await this.validateLiquid(input.subjectTemplate, sanitized, textContent);
     const isPublishedLatest = latest?.id === template.publishedRevisionId;
     const revision =
@@ -246,6 +260,7 @@ export class TemplateService {
               htmlContent: input.htmlContent,
               sanitizedHtml: sanitized,
               textContent,
+              autoTextContent,
               assets: latest?.assets.length
                 ? {
                     create: latest.assets.map((asset) => ({
@@ -267,6 +282,7 @@ export class TemplateService {
               htmlContent: input.htmlContent,
               sanitizedHtml: sanitized,
               textContent,
+              autoTextContent,
             },
           });
     await this.prisma.replyTemplate.update({
@@ -378,12 +394,19 @@ export class TemplateService {
     const [subject, html, text] = await Promise.all([
       this.liquidText.parseAndRender(revision.subjectTemplate, variables),
       this.liquidHtml.parseAndRender(revision.sanitizedHtml, variables),
-      this.liquidText.parseAndRender(revision.textContent, variables),
+      this.liquidText.parseAndRender(
+        revision.autoTextContent
+          ? this.toText(revision.sanitizedHtml)
+          : revision.textContent,
+        variables,
+      ),
     ]);
+    const cleanHtml = this.sanitize(html);
     return {
       subject: subject.replace(/[\r\n]+/g, " ").slice(0, 998),
-      html: this.sanitize(html),
+      html: cleanHtml,
       text,
+      warnings: this.deliverabilityWarnings(cleanHtml, text),
       assets: revision.assets,
       templateName: revision.template.name,
       version: revision.version,
@@ -398,6 +421,7 @@ export class TemplateService {
     subjectTemplate: string;
     htmlContent: string;
     textContent?: string;
+    autoTextContent?: boolean;
     variables: TemplateVariables;
   }) {
     const sanitized = this.sanitize(input.htmlContent);
@@ -406,15 +430,22 @@ export class TemplateService {
       sanitized,
       input.textContent ?? "",
     );
+    const textTemplate =
+      input.autoTextContent === false && input.textContent?.trim()
+        ? input.textContent
+        : this.toText(sanitized);
     const [subject, html, text] = await Promise.all([
       this.liquidText.parseAndRender(input.subjectTemplate, input.variables),
       this.liquidHtml.parseAndRender(sanitized, input.variables),
-      this.liquidText.parseAndRender(
-        input.textContent || this.toText(sanitized),
-        input.variables,
-      ),
+      this.liquidText.parseAndRender(textTemplate, input.variables),
     ]);
-    return { subject, html: this.sanitize(html), text };
+    const cleanHtml = this.sanitize(html);
+    return {
+      subject,
+      html: cleanHtml,
+      text,
+      warnings: this.deliverabilityWarnings(cleanHtml, text),
+    };
   }
 
   async delete(id: string): Promise<{ revisionCount: number }> {
@@ -423,19 +454,30 @@ export class TemplateService {
       select: {
         id: true,
         revisions: { select: { id: true } },
-        _count: { select: { defaultForTasks: true, rules: true } },
+        defaultForTasks: {
+          where: { status: { not: "DELETED" } },
+          select: { id: true, name: true },
+        },
+        rules: {
+          where: { task: { status: { not: "DELETED" } } },
+          select: {
+            id: true,
+            name: true,
+            task: { select: { id: true, name: true } },
+          },
+        },
       },
     });
     if (!template)
       throw new AppError("TEMPLATE_NOT_FOUND", "模板不存在或已删除", 404);
-    if (template._count.defaultForTasks || template._count.rules)
+    if (template.defaultForTasks.length || template.rules.length)
       throw new AppError(
         "TEMPLATE_IN_USE",
         "模板仍被自动回复任务或规则使用，请先更换对应模板后再删除",
         409,
         {
-          tasks: template._count.defaultForTasks,
-          rules: template._count.rules,
+          tasks: template.defaultForTasks,
+          rules: template.rules,
         },
       );
     const revisionIds = template.revisions.map((revision) => revision.id);
@@ -462,7 +504,16 @@ export class TemplateService {
         409,
         { processing },
       );
-    await this.prisma.replyTemplate.delete({ where: { id } });
+    await this.prisma.$transaction([
+      this.prisma.replyRule.deleteMany({
+        where: { templateId: id, task: { status: "DELETED" } },
+      }),
+      this.prisma.autoReplyTask.updateMany({
+        where: { defaultTemplateId: id, status: "DELETED" },
+        data: { defaultTemplateId: null },
+      }),
+      this.prisma.replyTemplate.delete({ where: { id } }),
+    ]);
     return { revisionCount: revisionIds.length };
   }
 
@@ -491,6 +542,7 @@ export class TemplateService {
             htmlContent: revision.htmlContent,
             sanitizedHtml: revision.sanitizedHtml,
             textContent: revision.textContent,
+            autoTextContent: revision.autoTextContent,
             assets: {
               create: revision.assets.map((asset) => ({
                 fileName: asset.fileName,
@@ -517,6 +569,28 @@ export class TemplateService {
       wordwrap: 100,
       selectors: [{ selector: "img", format: "skip" }],
     });
+  }
+
+  deliverabilityWarnings(html: string, text: string): string[] {
+    const warnings: string[] = [];
+    const links = html.match(/<a\b/gi)?.length ?? 0;
+    const images = html.match(/<img\b/gi)?.length ?? 0;
+    const visibleText = text.replace(/\s+/g, " ").trim();
+    if (links > 8)
+      warnings.push("模板包含较多链接，目标邮箱可能提高反垃圾评分");
+    if (images > 5)
+      warnings.push("模板包含较多图片，建议减少图片并保留足够正文文字");
+    if (html.length > 100_000)
+      warnings.push("HTML 内容超过 100KB，部分邮箱可能截断或拒收");
+    if (visibleText.length < 40 && html.length > 2_000)
+      warnings.push("富文本较多但纯文本内容过少，建议启用自动生成纯文本版本");
+    if (
+      /免费|限时|立即购买|点击领取|唯一.{0,6}官方|永久.{0,6}导航/i.test(
+        visibleText,
+      )
+    )
+      warnings.push("正文包含常见营销词，最终投递可能受发件信誉影响");
+    return warnings;
   }
 
   private async validateLiquid(...values: string[]): Promise<void> {

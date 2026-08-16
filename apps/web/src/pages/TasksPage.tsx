@@ -11,33 +11,39 @@ import {
 } from "lucide-react";
 import { api, json } from "../api";
 import { useApp } from "../app-context";
-import type { Mailbox, Rule, Template } from "../types";
+import type { Mailbox, Rule, SmtpConfig, Template } from "../types";
+import { writableRules } from "./task-utils";
 import {
   Card,
   Empty,
   Loading,
   Modal,
+  Notice,
   PageHeader,
   Status,
   fmtDate,
 } from "../ui";
+
 export function TasksPage() {
   const { notify } = useApp();
   const [mailboxes, setMailboxes] = useState<Mailbox[]>();
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [smtpConfigs, setSmtpConfigs] = useState<SmtpConfig[]>([]);
   const [defaults, setDefaults] = useState({ poll: 30, rate: 20 });
   const [editing, setEditing] = useState<Mailbox | null>(null);
   async function load() {
-    const [m, t, settings] = await Promise.all([
+    const [m, t, settings, smtp] = await Promise.all([
       api<Mailbox[]>("/api/v1/mailboxes"),
       api<Template[]>("/api/v1/templates"),
       api<{
         defaultPollIntervalSeconds: number;
         defaultBacklogPerMinute: number;
       }>("/api/v1/settings"),
+      api<SmtpConfig[]>("/api/v1/smtp/configs"),
     ]);
     setMailboxes(m);
     setTemplates(t);
+    setSmtpConfigs(smtp);
     setDefaults({
       poll: settings.defaultPollIntervalSeconds,
       rate: settings.defaultBacklogPerMinute,
@@ -103,6 +109,14 @@ export function TasksPage() {
                       </span>
                       <span>
                         积压限速 <b>{t.backlogPerMinute}/分钟</b>
+                      </span>
+                      <span>
+                        发件通道{" "}
+                        <b>
+                          {t.sendTransport === "SMTP"
+                            ? `SMTP · ${t.smtpConfig?.name || "配置缺失"}`
+                            : "邮箱服务商 API"}
+                        </b>
                       </span>
                       <span>
                         平均轮询耗时{" "}
@@ -172,6 +186,7 @@ export function TasksPage() {
         <TaskEditor
           mailbox={editing}
           templates={templates}
+          smtpConfigs={smtpConfigs}
           defaults={defaults}
           onClose={() => setEditing(null)}
           onSaved={async () => {
@@ -187,16 +202,19 @@ export function TasksPage() {
 function TaskEditor({
   mailbox,
   templates,
+  smtpConfigs,
   defaults,
   onClose,
   onSaved,
 }: {
   mailbox: Mailbox;
   templates: Template[];
+  smtpConfigs: SmtpConfig[];
   defaults: { poll: number; rate: number };
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { notify } = useApp();
   const task = mailbox.task;
   const [name, setName] = useState(
     task?.name || `${mailbox.displayName} 自动回复`,
@@ -209,6 +227,12 @@ function TaskEditor({
       "",
   );
   const [rules, setRules] = useState<Rule[]>(task?.rules || []);
+  const [sendTransport, setSendTransport] = useState<"MAILBOX_API" | "SMTP">(
+    task?.sendTransport || "MAILBOX_API",
+  );
+  const [smtpConfigId, setSmtpConfigId] = useState(
+    task?.smtpConfigId || smtpConfigs[0]?.id || "",
+  );
   const [busy, setBusy] = useState(false);
   const [draggingRule, setDraggingRule] = useState<number | null>(null);
   async function save() {
@@ -223,6 +247,8 @@ function TaskEditor({
             pollIntervalSeconds: Number(poll),
             backlogPerMinute: Number(rate),
             defaultTemplateId: template,
+            sendTransport,
+            smtpConfigId: sendTransport === "SMTP" ? smtpConfigId : null,
           }),
         );
       else {
@@ -234,12 +260,22 @@ function TaskEditor({
               pollIntervalSeconds: Number(poll),
               backlogPerMinute: Number(rate),
               defaultTemplateId: template,
+              sendTransport,
+              smtpConfigId: sendTransport === "SMTP" ? smtpConfigId : null,
             }),
           )
         ).id;
       }
-      await api(`/api/v1/tasks/${id}/rules`, json("PATCH", { rules }));
+      await api(
+        `/api/v1/tasks/${id}/rules`,
+        json("PATCH", { rules: writableRules(rules) }),
+      );
       onSaved();
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "任务配置保存失败",
+        "danger",
+      );
     } finally {
       setBusy(false);
     }
@@ -325,7 +361,47 @@ function TaskEditor({
               ))}
           </select>
         </label>
+        <label>
+          发件通道
+          <select
+            value={sendTransport}
+            onChange={(event) =>
+              setSendTransport(event.target.value as "MAILBOX_API" | "SMTP")
+            }
+          >
+            <option value="MAILBOX_API">邮箱服务商 API（Graph / Gmail）</option>
+            <option value="SMTP">SMTP 发件</option>
+          </select>
+        </label>
+        {sendTransport === "SMTP" && (
+          <label>
+            SMTP 配置
+            <select
+              value={smtpConfigId}
+              onChange={(event) => setSmtpConfigId(event.target.value)}
+            >
+              <option value="">请选择 SMTP 配置</option>
+              {smtpConfigs.map((config) => (
+                <option key={config.id} value={config.id}>
+                  {config.name} · {config.fromEmail}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
+      {Number(poll) <= 5 && (
+        <Notice>
+          3–5 秒属于高频尽力轮询：不会因为设置本身违反 Microsoft 或 Google
+          协议，但更容易触发 API 限流。系统会遵守
+          Retry-After、自动指数退避并禁止重叠轮询；稳定运行建议使用 10–30 秒。
+        </Notice>
+      )}
+      {sendTransport === "SMTP" && !smtpConfigs.length && (
+        <Notice kind="danger">
+          尚未配置 SMTP。请先到“系统设置 → SMTP 发件”添加并测试配置。
+        </Notice>
+      )}
       <div className="section-title">
         <div>
           <h3>优先级规则</h3>
@@ -520,7 +596,13 @@ function TaskEditor({
       </div>
       <div className="modal-actions">
         <button onClick={onClose}>取消</button>
-        <button className="primary" disabled={busy || !template} onClick={save}>
+        <button
+          className="primary"
+          disabled={
+            busy || !template || (sendTransport === "SMTP" && !smtpConfigId)
+          }
+          onClick={save}
+        >
           {busy ? "保存中…" : "保存配置"}
         </button>
       </div>

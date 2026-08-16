@@ -1,25 +1,26 @@
 # MailPilot — Microsoft 与 Gmail 邮箱自动回复系统
 
-当前版本：**v0.16**
+当前版本：**v0.17**
 
 [![CI](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml)
 
-MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。它通过 Microsoft Graph 或 Gmail API 检测 Outlook、Hotmail、全球版 Microsoft 365、Gmail 和 Google Workspace 邮箱的新邮件，并根据模板和规则自动执行普通 Reply。
+MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。它通过 Microsoft Graph 或 Gmail API 检测 Outlook、Hotmail、全球版 Microsoft 365、Gmail 和 Google Workspace 邮箱的新邮件，并根据模板和规则自动执行普通 Reply。发件可按任务选择邮箱服务商 API，或选择一套独立 SMTP 配置。
 
-系统不使用 IMAP/SMTP，不保存邮箱密码。收件、发件和 OAuth 都通过 HTTPS 访问 Microsoft 或 Google 官方 API，因此服务器无需开放 993、465 或 587 端口。
+系统不使用 IMAP、POP3 或 SMTP 收件，也不保存 Microsoft/Google 邮箱登录密码。OAuth 与收件始终通过 HTTPS 访问 Microsoft 或 Google 官方 API；只有管理员主动启用 SMTP 发件时，系统才会加密保存对应 SMTP 密码或应用专用密码，并从服务器出站连接配置的 465/587 等端口。
 
-> v0.16 支持保存多套 Microsoft Graph 与 Google Cloud / Gmail API 应用，并在连接每个邮箱时选择对应应用；发送状态也改为“服务商已接受”，避免把发件服务商接受误解成目标邮箱最终送达。正式投入使用前，仍应使用你自己的凭据和测试邮箱完成本文末尾的业务验收。
+> v0.17 新增按任务选择 SMTP 发件、多套 SMTP 配置、SMTP 加密备份恢复、模板纯文本自动同步和投递风险提示；同时修复任务默认模板保存、模板删除引用判断和暂停恢复补处理，并为四类日志加入完整分页。正式投入使用前，仍应使用你自己的凭据和测试邮箱完成本文末尾的业务验收。
 
 ## 目录
 
 - [主要功能](#主要功能)
-- [v0.16 支持范围](#v016-支持范围)
+- [v0.17 支持范围](#v017-支持范围)
 - [系统架构](#系统架构)
 - [网络与服务器要求](#网络与服务器要求)
 - [Debian 一键安装](#debian-一键安装)
 - [配置域名和 HTTPS](#配置域名和-https)
 - [注册 Microsoft Entra 应用](#注册-microsoft-entra-应用)
 - [注册 Google Cloud Gmail 应用](#注册-google-cloud-gmail-应用)
+- [配置 SMTP 发件](#配置-smtp-发件)
 - [首次登录](#首次登录)
 - [连接邮箱](#连接邮箱)
 - [创建回复模板](#创建回复模板)
@@ -45,25 +46,26 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - Google 支持 Gmail 个人邮箱和 Google Workspace 用户邮箱。
 - Microsoft 邮箱支持 OAuth 2.0 Authorization Code + PKCE 网页登录（推荐），也支持 Client ID + Refresh Token 高级导入。
 - Microsoft Graph 和 Google Cloud / Gmail API 均可保存多套应用配置；添加或重新授权邮箱时选择对应应用，凭据和影响范围彼此隔离。
+- 可保存多套 SMTP 发件配置，并让每个自动回复任务单独选择“邮箱服务商 API”或指定 SMTP 配置；SMTP 密码使用实例主密钥加密。
 - 使用加密的 MSAL Token Cache、Microsoft Refresh Token Cache 或 Google Refresh Token 自动续期，不保存邮箱登录密码。
 - Microsoft 分别检测 inbox 与 junkemail；Gmail 分别识别 INBOX 与 SPAM。
 - 检测周期最低可设置为 3 秒；这是尽力而为周期，不是硬实时承诺。
 - 每封合格新邮件最多回复一次；同一会话后续新邮件仍可分别回复。
 - 每个邮箱一个自动回复任务，任务支持多条优先级规则。
 - 支持发件人地址、发件人域名、主题和所在文件夹规则。
-- 支持富文本、HTML、Liquid 变量、条件语句、内嵌图片和固定附件。
+- 支持富文本、HTML、Liquid 变量、条件语句、内嵌图片和固定附件；默认从 HTML 自动同步纯文本版本并提示常见投递风险。
 - 模板采用草稿、发布和版本修订模式。
-- 暂停期间不发送，恢复后从 Microsoft Delta Link 或 Gmail History ID 补处理积压邮件。
+- 暂停期间不发送；恢复时从暂停前安全重叠窗口重建 Microsoft Delta 或 Gmail History 基线，通过数据库去重补处理暂停期间邮件。
 - PostgreSQL 事务 Outbox、BullMQ、Redis 锁和发送限速防止丢任务或并发重复发送。
 - 通过草稿 ID、追踪头和已发送邮件核验处理发送超时，避免盲目重发。
 - 管理后台支持暗色、亮色和跟随系统三态主题。
-- 支持处理日志、系统日志、告警记录、审计日志、独立保留周期、CSV/JSON 导出和签名 Webhook。
+- 支持处理日志、系统日志、告警记录、审计日志、独立保留周期、5/10/30/50/100 条分页、页码跳转、CSV/JSON 导出和签名 Webhook。
 - 仪表盘按邮件发现时间和最终完成时间分别统计最近 24 小时与 7 天数据。
 - 支持 Argon2id + XChaCha20-Poly1305 加密备份与跨服务器恢复。
 - 系统设置内置在线升级：检查正式版本、升级前加密备份、实时进度、健康检查和失败自动回滚。
 - 提供 Debian 安装脚本、改密 CLI、健康检查和命令行升级回滚脚本。
 
-## v0.16 支持范围
+## v0.17 支持范围
 
 支持：
 
@@ -79,7 +81,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - 共享邮箱。
 - Microsoft 365 中国世纪互联版。
 - 工作时间、星期计划或定时启停。
-- IMAP、POP3、SMTP 模式。
+- IMAP、POP3 或 SMTP 收件。
 - 多管理员和开放注册。
 
 ## 系统架构
@@ -99,6 +101,7 @@ flowchart LR
     W -->|收件检测与回复 HTTPS| M
     A -->|OAuth HTTPS| G[Google OAuth]
     W -->|History / Gmail API HTTPS| GA[Gmail API]
+    W -->|可选 TLS / STARTTLS 发件| S[管理员配置的 SMTP 服务器]
 ```
 
 Docker Compose 包含：
@@ -139,11 +142,12 @@ updater 是唯一挂载 `/var/run/docker.sock` 的容器。Docker Socket 等同�
 - 能访问 Microsoft 登录和 CDN 相关域名。
 - 能访问 accounts.google.com 和 oauth2.googleapis.com。
 - 能访问 gmail.googleapis.com 和 openidconnect.googleapis.com。
+- 使用 SMTP 发件时，允许 worker 容器出站连接所配置的 SMTP 主机与端口；推荐 465/TLS 或 587/STARTTLS。
 
 不需要开放：
 
 - IMAP 993。
-- SMTP 465、587 或 25。
+- 入站 SMTP 25、465 或 587；系统只会在启用 SMTP 发件时建立出站连接。
 - PostgreSQL 5432。
 - Redis 6379。
 
@@ -197,7 +201,7 @@ sudo ./install.sh
 http://服务器公网IP:8080
 ```
 
-例如服务器 IP 为 `168.110.210.195` 时，访问 `http://168.110.210.195:8080`。IP 直连是明文 HTTP，只适合首次配置、临时使用或已由防火墙限制来源的环境；Microsoft/Google OAuth 网页授权仍必须配置 HTTPS 域名。
+例如服务器 IP 为 `203.0.113.10` 时，访问 `http://203.0.113.10:8080`。IP 直连是明文 HTTP，只适合首次配置、临时使用或已由防火墙限制来源的环境；Microsoft/Google OAuth 网页授权仍必须配置 HTTPS 域名。
 
 IP 直连模式默认使用 `PUBLIC_URL=` 和 `TRUST_PROXY=0`。不要在 8080 仍直接暴露公网时把 `TRUST_PROXY` 改为 `1`，否则客户端可伪造转发 IP 请求头。
 
@@ -532,6 +536,39 @@ https://mail.example.com/api/v1/google/oauth/callback
 
 保存后 Client Secret 不再显示原文，只能替换。连接 Gmail 时选择要使用的应用。修改某套应用的 Client ID 只会暂停绑定该应用的 Gmail 任务并要求重新授权；只替换同一客户端的 Secret 时，系统会先尝试刷新绑定邮箱。仍有邮箱使用的应用不能删除。
 
+## 配置 SMTP 发件
+
+SMTP 是可选的发件通道，收件检测仍由 Microsoft Graph 或 Gmail API 完成。它适合以下情况：
+
+- 希望使用独立事务邮件服务发送自动回复。
+- Microsoft/Google 邮箱暂时无法发件，但授权仍可正常读取收件箱。
+- 希望不同任务使用不同发件域名或 SMTP 服务。
+
+进入：
+
+**系统设置 → SMTP 发件 → 添加 SMTP**
+
+需要填写：
+
+- 配置名称。
+- SMTP 主机，例如 `smtp.example.com`。
+- 端口与加密模式：推荐 `465 + TLS` 或 `587 + STARTTLS`。
+- SMTP 用户名。
+- SMTP 密码或应用专用密码。
+- 发件地址和可选发件人名称。
+- 可选固定 Reply-To；留空时，正式自动回复使用被检测邮箱地址作为 Reply-To。
+
+系统强制 TLS 1.2 以上并验证服务器证书，不支持明文 SMTP。密码使用实例主密钥加密，保存后不再返回给浏览器，也不会写入日志。Gmail、Outlook 和启用双重验证的服务通常需要应用专用密码，而不是网页登录密码。
+
+保存后可执行两种测试：
+
+1. 收件地址留空：只验证 DNS、TLS、连接和身份认证。
+2. 填写收件地址：额外发送一封简单 SMTP 测试邮件。
+
+然后进入“自动回复”，编辑任务，在“发件通道”中选择 `SMTP 发件` 和对应配置。模板、Liquid 变量、HTML、纯文本、内嵌图片、固定附件、Reply-To、会话头和处理日志与 API 发件共用同一套逻辑。
+
+注意：SMTP 返回接受只说明 SMTP 服务器接受了邮件数据，不是目标邮箱的最终送达回执。生产使用前应为发件域名正确配置 SPF、DKIM 和 DMARC，并确认 SMTP 服务允许使用所填写的 From 地址。SMTP 配置被活动任务引用时不能删除；先把任务切换到其他通道后再删除。
+
 ## 首次登录
 
 打开：
@@ -683,7 +720,7 @@ POST /api/v1/microsoft/import-refresh-token
 1. 填写模板名称和说明。
 2. 设置回复主题。
 3. 使用富文本或 HTML 模式编辑正文。
-4. 填写纯文本版本；留空时系统会从 HTML 自动生成。
+4. 保持“自动根据 HTML 生成并同步纯文本版本”开启（推荐）；只有确有需要时才关闭并手工维护纯文本。
 5. 上传固定附件或内嵌图片。
 6. 使用桌面、移动、明亮和暗色预览。
 7. 保存草稿。
@@ -729,6 +766,7 @@ POST /api/v1/microsoft/import-refresh-token
 - 保存和发送前都会进行 HTML 白名单清洗。
 - script、iframe、表单、事件属性和危险 URL 会被移除。
 - 同时生成 HTML 和纯文本邮件正文。
+- 预览和真实测试发送会提示链接过多、图片过多、HTML 过大、纯文本不足和常见营销词等投递风险。
 
 附件规则：
 
@@ -751,7 +789,7 @@ POST /api/v1/microsoft/import-refresh-token
 
 “测试发送”会：
 
-- 选择一个已连接邮箱发送。
+- 选择一个已连接邮箱 API 或一套 SMTP 配置发送。
 - 允许填写任意测试收件地址。
 - 在主题中增加“自动回复模板测试”标记。
 - 不进入正式邮件去重记录。
@@ -769,6 +807,7 @@ POST /api/v1/microsoft/import-refresh-token
 - 检测周期，最小 3 秒。
 - 积压发送上限，默认每邮箱每分钟 20 封。
 - 已发布的默认模板。
+- 发件通道：邮箱服务商 API，或一套已保存的 SMTP 配置。
 - 可选优先级规则。
 
 保存后任务处于草稿状态。点击“启动”后：
@@ -787,6 +826,8 @@ POST /api/v1/microsoft/import-refresh-token
 - Worker 资源和服务器负载。
 
 后台会显示平均检测延迟、下次检查时间和积压数量。
+
+3 秒设置本身不违反 Microsoft Graph 或 Gmail API 协议，但 inbox 与 junk/spam 都需要持续请求，邮箱越多越容易遇到动态限流或配额限制。系统会禁止同一邮箱重叠轮询、遵守 `Retry-After` 并指数退避；长期稳定运行建议优先使用 10–30 秒，仅在确有低延迟需求且持续观察限流指标时使用 3–5 秒。
 
 ## 规则匹配说明
 
@@ -838,7 +879,7 @@ POST /api/v1/microsoft/import-refresh-token
 
 ### 恢复
 
-- 从旧游标继续。
+- 从暂停前的安全重叠窗口重建增量基线，并使用数据库去重过滤已经处理的邮件。
 - 补处理暂停期间的新邮件。
 - 使用恢复时当前已发布的规则和模板。
 - 继续受每邮箱每分钟积压限速保护。
@@ -899,7 +940,7 @@ POST /api/v1/microsoft/import-refresh-token
 - 实际收件地址优先使用有效 Reply-To，没有时才使用 From。
 - Microsoft 官方邮件不能通过伪造外部 Reply-To 绕过服务域名过滤。
 - 不使用 Reply All。
-- Microsoft 保持 Graph conversation；Gmail 使用 threadId、In-Reply-To 和 References 保持会话关系。
+- Microsoft 保持 Graph conversation；Gmail 使用 threadId、In-Reply-To 和 References 保持会话关系；SMTP 使用 In-Reply-To、References 和稳定 Message-ID 维持普通回复关系。
 - 默认不附带原邮件正文。
 - 添加 Auto-Submitted、X-Auto-Response-Suppress 和实例追踪头。
 
@@ -911,7 +952,9 @@ POST /api/v1/microsoft/import-refresh-token
 
 UNCERTAIN 记录禁止直接强制重发，应先人工检查对应邮箱的草稿和已发送邮件。
 
-后台将 SENT 显示为“服务商已接受”。它表示 Microsoft Graph 或 Gmail API 已确认邮件进入发件邮箱的已发送目录，只能证明发件服务商接受了发送，**不等于目标邮箱最终收到**。目标提供商仍可能延迟、拒收、静默过滤、按规则归档或因邮件内容与发件信誉拦截；Microsoft Graph 和 Gmail API 不提供跨服务商的最终投递回执。
+SMTP 没有跨服务商可查询的草稿/已发送状态，因此采用更保守的状态机：连接、认证或收件人被明确拒绝时记为 `FAILED_CONFIRMED`，可以人工重试；SMTP `DATA` 阶段断线、服务器接受响应尚未持久化时记为 `UNCERTAIN`，禁止自动重发，以免产生重复回复。
+
+后台将 SENT 显示为“服务商已接受”。对 Microsoft Graph/Gmail API，它表示邮件已进入发件邮箱的已发送目录；对 SMTP，它表示 SMTP 服务器接受了邮件数据。两者都只证明发件服务商接受了发送，**不等于目标邮箱最终收到**。目标提供商仍可能延迟、拒收、静默过滤、按规则归档或因邮件内容与发件信誉拦截；系统无法获得跨服务商的可靠最终投递回执。
 
 ## 日志、告警和 Webhook
 
@@ -942,7 +985,7 @@ UNCERTAIN 记录禁止直接强制重发，应先人工检查对应邮箱的草�
 
 - 来信正文。
 - 来信附件内容。
-- 邮箱密码。
+- Microsoft/Google 邮箱登录密码；管理员主动填写的 SMTP 密码仅以实例密钥加密形式保存。
 - Token。
 - Client Secret。
 - 备份口令。
@@ -953,15 +996,15 @@ UNCERTAIN 记录禁止直接强制重发，应先人工检查对应邮箱的草�
 | ---------------------- | -------: |
 | 处理日志               |       30 |
 | 系统日志               |       30 |
-| 已恢复的告警记录       |       30 |
+| 告警记录（全部状态）   |       30 |
 | 审计日志               |      180 |
 | 去重指纹（可靠性数据） |      365 |
 
-可在“系统设置 → 常规”中分别设置为 1–3650 天。Worker 启动后会立即检查一次，之后至少每 24 小时自动清理超期记录。仍处于“未处理”或“已确认”的活动告警不会因为保留周期而消失，只有状态为“已恢复”的告警记录才会删除；删除告警前也会清理关联的待投递 Webhook Outbox。
+可在“系统设置 → 常规”中分别设置为 1–3650 天。Worker 按系统时区的自然日执行清理：例如设置 3 天时，第 4 天开始后会删除第 1 天的全部记录。处理日志、系统日志、告警记录和审计日志超过各自周期后都会删除，告警不会因 `OPEN`、`ACKNOWLEDGED` 或 `RESOLVED` 状态而额外保留；删除告警前也会清理关联的待投递 Webhook Outbox。
 
 去重指纹不是可见日志，它用于阻止同一封邮件被重复回复。缩短该周期会同步缩短极旧邮件在异常重新扫描时的重复保护时间，建议保留默认 365 天。
 
-处理日志和系统日志支持 CSV/JSON 导出。CSV 已对表格公式注入进行防护。
+处理日志、系统日志、告警记录和审计日志都支持分页，可选择每页 5、10、30、50 或 100 条，并支持首页、末页、上一页、下一页和指定页跳转。处理日志和系统日志支持 CSV/JSON 导出，CSV 已对表格公式注入进行防护。
 
 ### 告警
 
@@ -1066,6 +1109,7 @@ docker compose exec app autoreply admin reset-password --disable-totp
 备份包含：
 
 - 全部 Microsoft 与 Google OAuth 应用配置及邮箱关联。
+- 全部 SMTP 配置；SMTP 密码在备份加密流内部以可迁移形式保存，恢复时再使用目标实例主密钥重新加密。
 - 可迁移的 Microsoft MSAL Token Cache、Microsoft Client ID + Refresh Token 加密缓存与 Google OAuth Token Cache。
 - 邮箱、任务、游标和规则。
 - 模板、模板版本和附件。
@@ -1103,6 +1147,7 @@ docker compose exec app autoreply admin reset-password --disable-totp
 
 - 公开域名。
 - Microsoft 与 Google Client ID/Secret。
+- SMTP 主机、发件地址、认证和目标服务器出站端口。
 - 邮箱授权状态。
 - Microsoft Delta 游标与 Gmail History 游标。
 - 积压数量。
@@ -1425,6 +1470,20 @@ docker compose up -d
 
 无法恢复。备份加密没有后门。请妥善保管口令，并与备份文件分开保存。
 
+### 15. Microsoft 测试发送提示 Account suspended
+
+`ErrorAccountSuspend`、`Account suspended` 或 `WASCL ... Suspend` 表示 Microsoft 已暂停该邮箱的发信能力，不是 MailPilot 模板或 Graph 请求格式错误。请先登录 Outlook 网页版，查看收件箱、账户安全页或发送页面中的验证/解除限制提示。v0.17 会直接显示“Microsoft 已暂停邮箱发信”，并暂停持续失败的任务，避免继续无效重试。
+
+如果该邮箱仍能正常授权和读取收件箱，也可以把任务临时切换为一套独立 SMTP 配置发件；这不会解除 Microsoft 账户本身的限制。
+
+### 16. SMTP 测试连接失败或接受后仍未收到
+
+- `SMTP_AUTH_FAILED`：检查用户名、密码或应用专用密码。
+- `SMTP_TLS_FAILED`：检查主机名、465/TLS 与 587/STARTTLS 是否对应，以及证书是否有效。
+- `SMTP_RECIPIENT_REJECTED` / `SMTP_REJECTED`：SMTP 服务明确拒绝收件人或邮件。
+- `SMTP_SEND_STATUS_UNCERTAIN`：连接在 DATA 阶段中断，系统为避免重复邮件不会自动重发。
+- SMTP 已接受但目标邮箱未收到：检查 SPF、DKIM、DMARC、From 是否获授权、发件域名/IP 信誉、退信、隔离区、邮件追踪，以及模板中的链接、图片和营销内容。
+
 ## 安全建议
 
 - 生产环境必须使用 HTTPS。
@@ -1495,7 +1554,7 @@ http://127.0.0.1:4174
 
 仓库内置 GitHub Actions，会在 Linux/Node.js 22 上重复静态检查，并构建、启动完整 Docker Compose 栈，验证迁移、关键数据库索引、PostgreSQL、Redis、app、worker、健康接口、维护任务和运维 CLI。
 
-当前包含 27 个后端测试文件、133 项后端自动化测试，以及 3 个前端测试文件、7 项前端自动化测试，覆盖：
+当前包含 30 个后端测试文件、154 项后端自动化测试，以及 4 个前端测试文件、8 项前端自动化测试，覆盖：
 
 - Graph Token 临时故障和授权失效区分。
 - Microsoft Client ID + Refresh Token 导入、25 秒外部验证预算、有限重试、并行 Graph 验证、阶段化错误映射、安全诊断日志、权限校验、Token 轮换、撤销授权、401 强制刷新、并发凭据替换保护和无关 403 隔离。
@@ -1537,6 +1596,7 @@ http://127.0.0.1:4174
 - auth：登录、注销、改密、TOTP 和主题。
 - microsoft：多应用配置、OAuth 网页登录和 Client ID + Refresh Token 导入。
 - google：多套 Google Cloud Client 配置和 Gmail OAuth。
+- smtp：多套 SMTP 配置、加密密码、连接验证和真实发信测试。
 - mailboxes：邮箱连接状态和移除。
 - tasks：任务、暂停、恢复和规则。
 - templates：模板、发布、附件和测试发送。
@@ -1606,6 +1666,16 @@ API 使用统一请求 ID、错误码和脱敏错误结构。
 - Microsoft Delta Token 与 Gmail History ID 失效恢复。
 - 邮件在文件夹之间移动。
 - 启用前历史邮件不回复。
+- 暂停期间邮件在恢复任务后通过安全重扫全部补处理，且不会重复回复已处理邮件。
+
+### SMTP 发件
+
+- 465/TLS 与 587/STARTTLS。
+- 正确密码、错误密码、无效证书和网络不通。
+- 普通回复的 Reply-To、In-Reply-To、References、纯文本、HTML、内嵌图片和附件。
+- SMTP 明确拒绝时进入 `FAILED_CONFIRMED`。
+- DATA 阶段断线和 Worker 在接受响应落库前崩溃时进入 `UNCERTAIN`，不得自动重发。
+- SMTP 密码导出备份后在目标实例重新加密。
 
 ### 规则和模板
 
@@ -1619,6 +1689,9 @@ API 使用统一请求 ID、错误码和脱敏错误结构。
 - 小附件和大附件。
 - 模板修订锁定。
 - 真实测试发送。
+- HTML 自动同步纯文本版本和投递风险提示。
+- 默认模板保存后，旧规则对象中的只读字段不会导致整个任务保存失败。
+- 模板只被已删除任务遗留引用时可正常永久删除；活动引用会显示具体任务或规则。
 
 ### 防重复和故障
 
@@ -1631,7 +1704,14 @@ API 使用统一请求 ID、错误码和脱敏错误结构。
 - Redis 队列清空后从 PostgreSQL 重建。
 - Worker 重启。
 - Graph/Gmail API 401、403、429、5xx 和网络中断。
+- Microsoft `ErrorAccountSuspend` 显示明确账户暂停提示并停止持续无效发信。
 - 确认可验证场景不产生二次回复。
+
+### 日志和清理
+
+- 处理日志、系统日志、告警记录和审计日志分页、每页数量选择与页码跳转。
+- 按系统时区自然日清理；设置 3 天时第 4 天删除第 1 天全部记录。
+- 告警无论 OPEN、ACKNOWLEDGED 或 RESOLVED，超过保留周期后均删除。
 
 ### 备份和升级
 
@@ -1646,7 +1726,7 @@ API 使用统一请求 ID、错误码和脱敏错误结构。
 - 升级失败镜像回滚。
 - 数据库不兼容时使用升级前备份恢复。
 
-在未完成上述真实 Microsoft Graph、Gmail API 和 Debian 测试前，不应把测试邮箱以外的关键业务邮箱直接切换为无人值守运行。
+在未完成上述真实 Microsoft Graph、Gmail API、SMTP（如启用）和 Debian 测试前，不应把测试邮箱以外的关键业务邮箱直接切换为无人值守运行。
 
 ## 版本规则
 
@@ -1671,6 +1751,7 @@ v0.13
 v0.14
 v0.15
 v0.16
+v0.17
 ...
 ```
 

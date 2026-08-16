@@ -99,14 +99,26 @@ export class ObservabilityController {
   }
 
   @Get("alerts")
-  alerts(@Query("status") status?: string) {
+  async alerts(
+    @Query("page") pageRaw = "1",
+    @Query("pageSize") sizeRaw = "50",
+    @Query("status") status?: string,
+  ) {
     if (status && !["OPEN", "ACKNOWLEDGED", "RESOLVED"].includes(status))
       throw new AppError("ALERT_STATUS_INVALID", "告警状态筛选无效", 400);
-    return this.prisma.alert.findMany({
-      where: status ? { status: status as never } : undefined,
-      orderBy: [{ status: "asc" }, { lastSeenAt: "desc" }],
-      take: 500,
-    });
+    const page = this.positiveInt(pageRaw, 1, 1_000_000);
+    const pageSize = this.positiveInt(sizeRaw, 50, 100);
+    const where = status ? { status: status as never } : undefined;
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.alert.findMany({
+        where,
+        orderBy: [{ status: "asc" }, { lastSeenAt: "desc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.alert.count({ where }),
+    ]);
+    return { items, total, page, pageSize };
   }
 
   @Patch("alerts/:id/acknowledge")
@@ -378,9 +390,12 @@ export class ObservabilityController {
   }
 
   @Get("audit-logs")
-  async auditLogs(@Query("page") pageRaw = "1") {
+  async auditLogs(
+    @Query("page") pageRaw = "1",
+    @Query("pageSize") sizeRaw = "50",
+  ) {
     const page = this.positiveInt(pageRaw, 1, 1_000_000);
-    const pageSize = 50;
+    const pageSize = this.positiveInt(sizeRaw, 50, 100);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.auditLog.findMany({
         orderBy: { occurredAt: "desc" },

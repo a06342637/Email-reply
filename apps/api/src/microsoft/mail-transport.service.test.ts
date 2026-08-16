@@ -92,31 +92,34 @@ describe("MailTransportService", () => {
     expect(request.mock.calls[0]?.[1]).not.toContain("$expand=extensions");
   });
 
-  it("uses only Graph-supported custom headers for JSON test drafts", async () => {
+  it("creates Microsoft test drafts as multipart MIME with matching text and HTML", async () => {
     const request = vi.fn().mockResolvedValue({ id: "draft-1" });
     const service = new MailTransportService({ request } as never);
 
     await service.createTestDraft({
       mailboxId: "mailbox-1",
+      mailboxEmail: "owner@example.com",
       recipient: "recipient@example.net",
       subject: "模板测试",
       html: "<p>测试</p>",
+      text: "测试",
       trackingId: "test-tracking-1",
       instanceId: "instance-1",
     });
 
-    const body = JSON.parse(String(request.mock.calls[0]?.[2]?.body)) as {
-      internetMessageHeaders: Array<{ name: string; value: string }>;
-    };
-    expect(
-      body.internetMessageHeaders.every((header) =>
-        header.name.toLowerCase().startsWith("x-"),
-      ),
-    ).toBe(true);
-    expect(body.internetMessageHeaders).toContainEqual({
-      name: "X-AutoReply-Tracking",
-      value: "test-tracking-1",
+    const [, path, init, options] = request.mock.calls[0]!;
+    expect(path).toBe("/me/messages");
+    expect(init.headers).toEqual({
+      "content-type": "text/plain; charset=utf-8",
     });
+    expect(options).toEqual({ maxRetries: 0, expected: [201] });
+    const mime = Buffer.from(String(init.body), "base64").toString("utf8");
+    expect(mime).toContain("Auto-Submitted: auto-generated");
+    expect(mime).toContain("X-Auto-Response-Suppress: All");
+    expect(mime).toContain("X-AutoReply-Tracking: test-tracking-1");
+    expect(mime).toContain("Content-Type: multipart/alternative");
+    expect(mime).toContain("Content-Type: text/plain; charset=UTF-8");
+    expect(mime).toContain("Content-Type: text/html; charset=UTF-8");
   });
 
   it("matches existing duplicate attachments by count during recovery", async () => {

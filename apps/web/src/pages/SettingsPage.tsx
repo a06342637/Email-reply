@@ -4,9 +4,11 @@ import {
   Download,
   HardDrive,
   Lock,
+  MailPlus,
   Pencil,
   Plus,
   Save,
+  Send,
   ShieldCheck,
   Trash2,
   Upload,
@@ -16,7 +18,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { api, currentCsrf, json } from "../api";
 import { useApp } from "../app-context";
 import { UpdatePanel } from "../UpdatePanel";
-import type { ProviderAppConfig, ProviderConfig } from "../types";
+import type { ProviderAppConfig, ProviderConfig, SmtpConfig } from "../types";
 import {
   Card,
   Loading,
@@ -36,6 +38,19 @@ type AppEditor = {
   secretExpiresAt?: string;
 };
 
+type SmtpEditor = {
+  id?: string;
+  name: string;
+  host: string;
+  port: number;
+  security: "TLS" | "STARTTLS";
+  username: string;
+  password: string;
+  fromEmail: string;
+  fromName: string;
+  replyToEmail: string;
+};
+
 export function SettingsPage() {
   const { admin, applyUiSettings, refreshMe, notify } = useApp();
   const [data, setData] = useState<any>();
@@ -47,20 +62,26 @@ export function SettingsPage() {
   const [disableTotp, setDisableTotp] = useState(false);
   const [totpPassword, setTotpPassword] = useState("");
   const [webhooks, setWebhooks] = useState<any[]>([]);
+  const [smtpConfigs, setSmtpConfigs] = useState<SmtpConfig[]>([]);
   const [appEditor, setAppEditor] = useState<AppEditor>();
+  const [smtpEditor, setSmtpEditor] = useState<SmtpEditor>();
+  const [smtpTest, setSmtpTest] = useState<SmtpConfig>();
+  const [smtpTestRecipient, setSmtpTestRecipient] = useState("");
   async function load() {
-    const [s, m, g, i, w] = await Promise.all([
+    const [s, m, g, i, w, smtp] = await Promise.all([
       api("/api/v1/settings"),
       api("/api/v1/microsoft/config"),
       api("/api/v1/google/config"),
       api("/api/v1/system/info"),
       api<any[]>("/api/v1/webhooks"),
+      api<SmtpConfig[]>("/api/v1/smtp/configs"),
     ]);
     setData(s);
     setMs(m);
     setGoogle(g);
     setInfo(i);
     setWebhooks(w);
+    setSmtpConfigs(smtp);
   }
   useEffect(() => {
     void load();
@@ -146,6 +167,90 @@ export function SettingsPage() {
       notify(error instanceof Error ? error.message : "删除应用失败", "danger");
     }
   }
+  function editSmtp(config?: SmtpConfig) {
+    setSmtpEditor({
+      id: config?.id,
+      name: config?.name || `SMTP 配置 ${smtpConfigs.length + 1}`,
+      host: config?.host || "",
+      port: config?.port || 587,
+      security: config?.security || "STARTTLS",
+      username: config?.username || "",
+      password: "",
+      fromEmail: config?.fromEmail || "",
+      fromName: config?.fromName || "",
+      replyToEmail: config?.replyToEmail || "",
+    });
+  }
+  async function saveSmtp() {
+    if (!smtpEditor) return;
+    try {
+      await api(
+        smtpEditor.id
+          ? `/api/v1/smtp/configs/${smtpEditor.id}`
+          : "/api/v1/smtp/configs",
+        json(smtpEditor.id ? "PATCH" : "POST", {
+          name: smtpEditor.name,
+          host: smtpEditor.host,
+          port: Number(smtpEditor.port),
+          security: smtpEditor.security,
+          username: smtpEditor.username,
+          password: smtpEditor.password || undefined,
+          fromEmail: smtpEditor.fromEmail,
+          fromName: smtpEditor.fromName.trim() || null,
+          replyToEmail: smtpEditor.replyToEmail.trim() || null,
+        }),
+      );
+      notify(smtpEditor.id ? "SMTP 配置已更新" : "SMTP 配置已添加");
+      setSmtpEditor(undefined);
+      await load();
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "SMTP 配置保存失败",
+        "danger",
+      );
+    }
+  }
+  async function deleteSmtp(config: SmtpConfig) {
+    if (
+      !confirm(
+        `确定删除 SMTP 配置“${config.name}”吗？仍被任务使用时系统会拒绝删除。`,
+      )
+    )
+      return;
+    try {
+      await api(`/api/v1/smtp/configs/${config.id}`, json("DELETE"));
+      notify("SMTP 配置已删除");
+      await load();
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "SMTP 配置删除失败",
+        "danger",
+      );
+    }
+  }
+  async function runSmtpTest() {
+    if (!smtpTest) return;
+    try {
+      await api(
+        `/api/v1/smtp/configs/${smtpTest.id}/test`,
+        json("POST", {
+          recipient: smtpTestRecipient || undefined,
+        }),
+      );
+      notify(
+        smtpTestRecipient
+          ? "SMTP 服务器已接受测试邮件"
+          : "SMTP 连接与身份验证成功",
+      );
+      setSmtpTest(undefined);
+      setSmtpTestRecipient("");
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "SMTP 测试失败",
+        "danger",
+      );
+    }
+  }
   async function turnOffTotp() {
     await api(
       "/api/v1/auth/totp/disable",
@@ -167,6 +272,7 @@ export function SettingsPage() {
           ["general", "常规"],
           ["microsoft", "Microsoft"],
           ["google", "Google / Gmail"],
+          ["smtp", "SMTP 发件"],
           ["security", "登录安全"],
           ["backup", "备份恢复"],
           ["update", "在线升级"],
@@ -280,8 +386,9 @@ export function SettingsPage() {
             </div>
             <h3>日志和告警保存周期（天）</h3>
             <p className="muted-copy">
-              Worker
-              每天自动清理超过周期的数据。仍处于“未处理”或“已确认”的活动告警会保留，只有已恢复的告警记录会按周期删除。
+              Worker 按系统时区的自然日每天清理。设置 3 天时，从第 4
+              天开始删除第 1
+              天的全部记录；处理日志、系统日志、告警记录和审计日志超过各自周期后都会删除，告警不再因状态而额外保留。
             </p>
             <div className="form-grid four">
               <NumberField
@@ -534,6 +641,88 @@ export function SettingsPage() {
           </div>
         </Card>
       )}
+      {tab === "smtp" && (
+        <Card>
+          <div className="settings-section">
+            <div className="provider-app-heading">
+              <div>
+                <h2>SMTP 发件配置</h2>
+                <p>
+                  收件检测仍由 Microsoft Graph 或 Gmail API
+                  完成；每个自动回复任务可以单独选择使用邮箱服务商 API 或这里的
+                  SMTP 配置发件。
+                </p>
+              </div>
+              <button className="primary" onClick={() => editSmtp()}>
+                <Plus /> 添加 SMTP
+              </button>
+            </div>
+            <Notice>
+              推荐使用 465 + TLS 或 587 + STARTTLS。系统强制 TLS 1.2
+              以上并验证服务器证书，不支持明文 SMTP。Gmail、Outlook
+              等服务通常需要应用专用密码；发件地址必须是 SMTP
+              服务允许使用的地址。
+            </Notice>
+            <Notice kind="danger">
+              SMTP 服务器“接受”邮件仍不等于目标邮箱最终投递。发件域名应正确配置
+              SPF、DKIM 和
+              DMARC，并避免大量营销链接、短链或正文与纯文本版本不一致。
+            </Notice>
+            {smtpConfigs.length ? (
+              <div className="provider-app-list smtp-config-list">
+                {smtpConfigs.map((config) => (
+                  <section key={config.id}>
+                    <div className="provider-app-card-head">
+                      <div>
+                        <strong>{config.name}</strong>
+                        <span>{config.taskCount} 个任务正在使用</span>
+                      </div>
+                      <div className="row-actions">
+                        <button
+                          onClick={() => {
+                            setSmtpTest(config);
+                            setSmtpTestRecipient("");
+                          }}
+                        >
+                          <Send /> 测试
+                        </button>
+                        <button onClick={() => editSmtp(config)}>
+                          <Pencil /> 编辑
+                        </button>
+                        <button
+                          className="danger-link"
+                          onClick={() => deleteSmtp(config)}
+                        >
+                          <Trash2 /> 删除
+                        </button>
+                      </div>
+                    </div>
+                    <code>
+                      {config.host}:{config.port} · {config.security}
+                    </code>
+                    <div className="provider-app-meta">
+                      <span>登录：{config.username}</span>
+                      <span>
+                        发件：{config.fromName ? `${config.fromName} · ` : ""}
+                        {config.fromEmail}
+                      </span>
+                      <span>
+                        Reply-To：{config.replyToEmail || "使用被检测邮箱地址"}
+                      </span>
+                      <span>密码：已加密保存</span>
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <Notice>
+                尚未添加 SMTP 配置；现有任务仍可继续使用 Graph / Gmail API
+                发件。
+              </Notice>
+            )}
+          </div>
+        </Card>
+      )}
       {tab === "security" && (
         <Card>
           <div className="settings-section">
@@ -727,6 +916,165 @@ export function SettingsPage() {
               onClick={saveApp}
             >
               <Save /> 保存应用
+            </button>
+          </div>
+        </Modal>
+      )}
+      {smtpEditor && (
+        <Modal
+          title={smtpEditor.id ? "编辑 SMTP 配置" : "添加 SMTP 配置"}
+          onClose={() => setSmtpEditor(undefined)}
+        >
+          <div className="form-grid">
+            <label>
+              配置名称
+              <input
+                value={smtpEditor.name}
+                onChange={(event) =>
+                  setSmtpEditor({ ...smtpEditor, name: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              SMTP 主机
+              <input
+                value={smtpEditor.host}
+                placeholder="smtp.example.com"
+                onChange={(event) =>
+                  setSmtpEditor({ ...smtpEditor, host: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              端口
+              <input
+                type="number"
+                min={1}
+                max={65535}
+                value={smtpEditor.port}
+                onChange={(event) =>
+                  setSmtpEditor({
+                    ...smtpEditor,
+                    port: Number(event.target.value),
+                  })
+                }
+              />
+            </label>
+            <label>
+              加密模式
+              <select
+                value={smtpEditor.security}
+                onChange={(event) =>
+                  setSmtpEditor({
+                    ...smtpEditor,
+                    security: event.target.value as "TLS" | "STARTTLS",
+                    port: event.target.value === "TLS" ? 465 : 587,
+                  })
+                }
+              >
+                <option value="STARTTLS">STARTTLS（通常 587）</option>
+                <option value="TLS">TLS（通常 465）</option>
+              </select>
+            </label>
+            <label>
+              SMTP 用户名
+              <input
+                value={smtpEditor.username}
+                autoComplete="off"
+                onChange={(event) =>
+                  setSmtpEditor({ ...smtpEditor, username: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              {smtpEditor.id
+                ? "新密码（留空保持不变）"
+                : "SMTP 密码 / 应用专用密码"}
+              <input
+                type="password"
+                value={smtpEditor.password}
+                autoComplete="new-password"
+                onChange={(event) =>
+                  setSmtpEditor({ ...smtpEditor, password: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              发件地址
+              <input
+                type="email"
+                value={smtpEditor.fromEmail}
+                onChange={(event) =>
+                  setSmtpEditor({
+                    ...smtpEditor,
+                    fromEmail: event.target.value,
+                  })
+                }
+              />
+            </label>
+            <label>
+              发件人名称
+              <input
+                value={smtpEditor.fromName}
+                onChange={(event) =>
+                  setSmtpEditor({ ...smtpEditor, fromName: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              固定 Reply-To（可选）
+              <input
+                type="email"
+                value={smtpEditor.replyToEmail}
+                placeholder="留空时使用被检测邮箱"
+                onChange={(event) =>
+                  setSmtpEditor({
+                    ...smtpEditor,
+                    replyToEmail: event.target.value,
+                  })
+                }
+              />
+            </label>
+          </div>
+          <div className="modal-actions">
+            <button onClick={() => setSmtpEditor(undefined)}>取消</button>
+            <button
+              className="primary"
+              disabled={
+                !smtpEditor.name.trim() ||
+                !smtpEditor.host.trim() ||
+                !smtpEditor.username.trim() ||
+                !smtpEditor.fromEmail.trim() ||
+                (!smtpEditor.id && !smtpEditor.password)
+              }
+              onClick={saveSmtp}
+            >
+              <Save /> 保存 SMTP
+            </button>
+          </div>
+        </Modal>
+      )}
+      {smtpTest && (
+        <Modal
+          title={`测试 SMTP · ${smtpTest.name}`}
+          onClose={() => setSmtpTest(undefined)}
+        >
+          <Notice>
+            收件地址留空只测试 TLS
+            连接和身份验证；填写地址会额外发送一封简单测试邮件。
+          </Notice>
+          <label>
+            测试收件地址（可选）
+            <input
+              type="email"
+              value={smtpTestRecipient}
+              onChange={(event) => setSmtpTestRecipient(event.target.value)}
+            />
+          </label>
+          <div className="modal-actions">
+            <button onClick={() => setSmtpTest(undefined)}>取消</button>
+            <button className="primary" onClick={runSmtpTest}>
+              <MailPlus /> 开始测试
             </button>
           </div>
         </Modal>
