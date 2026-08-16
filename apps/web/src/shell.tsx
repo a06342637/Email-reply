@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity,
   Bell,
@@ -12,6 +12,7 @@ import {
   Moon,
   ServerCog,
   ScrollText,
+  Send,
   Settings,
   Sun,
   Workflow,
@@ -19,21 +20,37 @@ import {
 import { api, json } from "./api";
 import { useApp } from "./app-context";
 import { Modal, Notice } from "./ui";
+import { resolveSettingsTab, settingsTabHref } from "./pages/settings-tabs";
 
 const nav = [
-  ["/", "仪表盘", LayoutDashboard],
-  ["/mailboxes", "邮箱账号", Mail],
-  ["/tasks", "自动回复", Workflow],
-  ["/templates", "模板中心", BookOpenCheck],
-  ["/logs", "处理日志", ScrollText],
-  ["/system-logs", "系统日志", ServerCog],
-  ["/alerts", "告警中心", Bell],
-  ["/audit", "审计日志", Activity],
-  ["/settings", "系统设置", Settings],
+  { to: "/", label: "仪表盘", icon: LayoutDashboard },
+  { to: "/mailboxes", label: "邮箱账号", icon: Mail },
+  { to: "/tasks", label: "自动回复", icon: Workflow },
+  {
+    to: settingsTabHref("smtp"),
+    label: "SMTP 发件",
+    icon: Send,
+    settingsTab: "smtp",
+  },
+  { to: "/templates", label: "模板中心", icon: BookOpenCheck },
+  { to: "/logs", label: "处理日志", icon: ScrollText },
+  { to: "/system-logs", label: "系统日志", icon: ServerCog },
+  { to: "/alerts", label: "告警中心", icon: Bell },
+  { to: "/audit", label: "审计日志", icon: Activity },
+  {
+    to: "/settings",
+    label: "系统设置",
+    icon: Settings,
+    settingsTab: "other",
+  },
 ] as const;
 
 export function Shell() {
   const { admin, uiSettings, refreshMe } = useApp();
+  const routeLocation = useLocation();
+  const currentSettingsTab = resolveSettingsTab(
+    new URLSearchParams(routeLocation.search).get("tab"),
+  );
   const [collapsed, setCollapsed] = useState(false);
   const [mobile, setMobile] = useState(false);
   const [password, setPassword] = useState({ current: "", next: "" });
@@ -90,17 +107,32 @@ export function Shell() {
           </div>
         </div>
         <nav>
-          {nav.map(([to, label, Icon]) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === "/"}
-              onClick={() => setMobile(false)}
-            >
-              <Icon size={19} />
-              <span>{label}</span>
-            </NavLink>
-          ))}
+          {nav.map((item) => {
+            const route = item.to.split("?")[0]!;
+            const active =
+              "settingsTab" in item
+                ? routeLocation.pathname === "/settings" &&
+                  (item.settingsTab === "smtp"
+                    ? currentSettingsTab === "smtp"
+                    : currentSettingsTab !== "smtp")
+                : route === "/"
+                  ? routeLocation.pathname === "/"
+                  : routeLocation.pathname === route ||
+                    routeLocation.pathname.startsWith(`${route}/`);
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                className={active ? "active" : ""}
+                aria-current={active ? "page" : undefined}
+                onClick={() => setMobile(false)}
+              >
+                <Icon size={19} />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
         </nav>
         <div className="sidebar-foot">
           <button onClick={() => setCollapsed(!collapsed)}>

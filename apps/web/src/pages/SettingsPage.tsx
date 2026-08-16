@@ -15,6 +15,7 @@ import {
   Webhook,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import { useSearchParams } from "react-router-dom";
 import { api, currentCsrf, json } from "../api";
 import { useApp } from "../app-context";
 import { UpdatePanel } from "../UpdatePanel";
@@ -28,6 +29,7 @@ import {
   fmtBytes,
   fmtDate,
 } from "../ui";
+import { resolveSettingsTab, SETTINGS_TABS } from "./settings-tabs";
 
 type AppEditor = {
   provider: "microsoft" | "google";
@@ -53,11 +55,12 @@ type SmtpEditor = {
 
 export function SettingsPage() {
   const { admin, applyUiSettings, refreshMe, notify } = useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = resolveSettingsTab(searchParams.get("tab"));
   const [data, setData] = useState<any>();
   const [ms, setMs] = useState<any>();
   const [google, setGoogle] = useState<any>();
   const [info, setInfo] = useState<any>();
-  const [tab, setTab] = useState("general");
   const [totp, setTotp] = useState<any>();
   const [disableTotp, setDisableTotp] = useState(false);
   const [totpPassword, setTotpPassword] = useState("");
@@ -268,22 +271,17 @@ export function SettingsPage() {
         description="站点、邮件提供商、登录安全、保留周期、备份和健康状态。"
       />
       <div className="settings-tabs">
-        {[
-          ["general", "常规"],
-          ["microsoft", "Microsoft"],
-          ["google", "Google / Gmail"],
-          ["smtp", "SMTP 发件"],
-          ["security", "登录安全"],
-          ["backup", "备份恢复"],
-          ["update", "在线升级"],
-          ["system", "系统状态"],
-        ].map((x) => (
+        {SETTINGS_TABS.map(([id, label]) => (
           <button
-            key={x[0]}
-            className={tab === x[0] ? "active" : ""}
-            onClick={() => setTab(x[0]!)}
+            key={id}
+            className={tab === id ? "active" : ""}
+            onClick={() => {
+              const next = new URLSearchParams();
+              if (id !== "general") next.set("tab", id);
+              setSearchParams(next, { replace: true });
+            }}
           >
-            {x[1]}
+            {label}
           </button>
         ))}
       </div>

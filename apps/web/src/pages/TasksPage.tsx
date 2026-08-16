@@ -6,12 +6,15 @@ import {
   GripVertical,
   Play,
   Plus,
+  Send,
   Settings2,
   Trash2,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { api, json } from "../api";
 import { useApp } from "../app-context";
 import type { Mailbox, Rule, SmtpConfig, Template } from "../types";
+import { settingsTabHref } from "./settings-tabs";
 import { writableRules } from "./task-utils";
 import {
   Card,
@@ -74,18 +77,25 @@ export function TasksPage() {
     <>
       <PageHeader
         title="自动回复任务"
-        description="每个邮箱一个任务，全天检测收件箱和垃圾箱。"
+        description="每个邮箱一个任务；收件由 Microsoft Graph 或 Gmail API 检测，发件可独立选择邮箱 API 或 SMTP。"
         actions={
-          <button
-            className="primary"
-            disabled={
-              !available.length || !templates.some((t) => t.publishedRevisionId)
-            }
-            onClick={() => setEditing(available[0] || null)}
-          >
-            <Plus />
-            创建任务
-          </button>
+          <>
+            <Link className="button" to={settingsTabHref("smtp")}>
+              <Send />
+              SMTP 发件设置
+            </Link>
+            <button
+              className="primary"
+              disabled={
+                !available.length ||
+                !templates.some((t) => t.publishedRevisionId)
+              }
+              onClick={() => setEditing(available[0] || null)}
+            >
+              <Plus />
+              创建任务
+            </button>
+          </>
         }
       />
       <div className="task-list">
@@ -370,7 +380,7 @@ function TaskEditor({
             }
           >
             <option value="MAILBOX_API">邮箱服务商 API（Graph / Gmail）</option>
-            <option value="SMTP">SMTP 发件</option>
+            <option value="SMTP">SMTP 发件（收件仍使用邮箱 API）</option>
           </select>
         </label>
         {sendTransport === "SMTP" && (
@@ -399,7 +409,9 @@ function TaskEditor({
       )}
       {sendTransport === "SMTP" && !smtpConfigs.length && (
         <Notice kind="danger">
-          尚未配置 SMTP。请先到“系统设置 → SMTP 发件”添加并测试配置。
+          尚未配置 SMTP。请先
+          <Link to={settingsTabHref("smtp")}>打开 SMTP 发件设置</Link>
+          ，添加并测试配置后再保存任务。
         </Notice>
       )}
       <div className="section-title">

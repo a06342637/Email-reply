@@ -1,6 +1,6 @@
 # MailPilot — Microsoft 与 Gmail 邮箱自动回复系统
 
-当前版本：**v0.18**
+当前版本：**v0.19**
 
 [![CI](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/Email-reply/actions/workflows/ci.yml)
 
@@ -8,12 +8,12 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 
 系统不使用 IMAP、POP3 或 SMTP 收件，也不保存 Microsoft/Google 邮箱登录密码。OAuth 与收件始终通过 HTTPS 访问 Microsoft 或 Google 官方 API；只有管理员主动启用 SMTP 发件时，系统才会加密保存对应 SMTP 密码或应用专用密码，并从服务器出站连接配置的 465/587 等端口。
 
-> v0.18 强化四类日志分页体验：处理日志、系统日志、告警中心和审计日志现在都在列表顶部与底部直接显示完整分页栏，并增加可点击页码；每页 5/10/30/50/100 条、首页/末页、上一页/下一页和指定页跳转均保持可用。正式投入使用前，仍应使用你自己的凭据和测试邮箱完成本文末尾的业务验收。
+> v0.19 将 SMTP 发件提升为左侧独立入口，并在自动回复任务页加入直达配置按钮。收件仍由 Microsoft Graph 或 Gmail API 检测，任务可选择邮箱 API 或独立 SMTP 发件；模板、Liquid、HTML、纯文本、图片和附件继续共用同一套处理流程。正式投入使用前，仍应使用你自己的凭据和测试邮箱完成本文末尾的业务验收。
 
 ## 目录
 
 - [主要功能](#主要功能)
-- [v0.18 支持范围](#v018-支持范围)
+- [v0.19 支持范围](#v019-支持范围)
 - [系统架构](#系统架构)
 - [网络与服务器要求](#网络与服务器要求)
 - [Debian 一键安装](#debian-一键安装)
@@ -46,7 +46,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - Google 支持 Gmail 个人邮箱和 Google Workspace 用户邮箱。
 - Microsoft 邮箱支持 OAuth 2.0 Authorization Code + PKCE 网页登录（推荐），也支持 Client ID + Refresh Token 高级导入。
 - Microsoft Graph 和 Google Cloud / Gmail API 均可保存多套应用配置；添加或重新授权邮箱时选择对应应用，凭据和影响范围彼此隔离。
-- 可保存多套 SMTP 发件配置，并让每个自动回复任务单独选择“邮箱服务商 API”或指定 SMTP 配置；SMTP 密码使用实例主密钥加密。
+- 左侧导航提供独立“SMTP 发件”入口，可保存多套 SMTP 发件配置，并让每个自动回复任务单独选择“邮箱服务商 API”或指定 SMTP 配置；SMTP 密码使用实例主密钥加密。
 - 使用加密的 MSAL Token Cache、Microsoft Refresh Token Cache 或 Google Refresh Token 自动续期，不保存邮箱登录密码。
 - Microsoft 分别检测 inbox 与 junkemail；Gmail 分别识别 INBOX 与 SPAM。
 - 检测周期最低可设置为 3 秒；这是尽力而为周期，不是硬实时承诺。
@@ -65,7 +65,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - 系统设置内置在线升级：检查正式版本、升级前加密备份、实时进度、健康检查和失败自动回滚。
 - 提供 Debian 安装脚本、改密 CLI、健康检查和命令行升级回滚脚本。
 
-## v0.18 支持范围
+## v0.19 支持范围
 
 支持：
 
@@ -546,7 +546,9 @@ SMTP 是可选的发件通道，收件检测仍由 Microsoft Graph 或 Gmail API
 
 进入：
 
-**系统设置 → SMTP 发件 → 添加 SMTP**
+**左侧导航 → SMTP 发件 → 添加 SMTP**
+
+也可以进入“自动回复”，点击页面右上角的“SMTP 发件设置”直接打开同一配置页面。
 
 需要填写：
 
@@ -1554,7 +1556,7 @@ http://127.0.0.1:4174
 
 仓库内置 GitHub Actions，会在 Linux/Node.js 22 上重复静态检查，并构建、启动完整 Docker Compose 栈，验证迁移、关键数据库索引、PostgreSQL、Redis、app、worker、健康接口、维护任务和运维 CLI。
 
-当前包含 30 个后端测试文件、156 项后端自动化测试，以及 5 个前端测试文件、12 项前端自动化测试，覆盖：
+当前包含 30 个后端测试文件、156 项后端自动化测试，以及 6 个前端测试文件、14 项前端自动化测试，覆盖：
 
 - Graph Token 临时故障和授权失效区分。
 - Microsoft Client ID + Refresh Token 导入、25 秒外部验证预算、有限重试、并行 Graph 验证、阶段化错误映射、安全诊断日志、权限校验、Token 轮换、撤销授权、401 强制刷新、并发凭据替换保护和无关 403 隔离。
@@ -1753,6 +1755,7 @@ v0.15
 v0.16
 v0.17
 v0.18
+v0.19
 ...
 ```
 

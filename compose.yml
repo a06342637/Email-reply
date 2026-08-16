@@ -7,7 +7,7 @@ x-app-common: &app-common
     dockerfile: Dockerfile
     target: runtime
     args:
-      APP_VERSION: ${BUILD_APP_VERSION:-0.18}
+      APP_VERSION: ${BUILD_APP_VERSION:-0.19}
   env_file:
     - .env
   depends_on:
@@ -117,9 +117,9 @@ services:
       dockerfile: Dockerfile
       target: updater
       args:
-        APP_VERSION: ${BUILD_APP_VERSION:-0.18}
+        APP_VERSION: ${BUILD_APP_VERSION:-0.19}
     environment:
-      APP_VERSION: ${UPDATER_APP_VERSION:-0.18}
+      APP_VERSION: ${UPDATER_APP_VERSION:-0.19}
       DOCKER_CONFIG: /tmp/docker
       UPDATE_PORT: 3001
       UPDATER_TOKEN: ${UPDATER_TOKEN:-}
