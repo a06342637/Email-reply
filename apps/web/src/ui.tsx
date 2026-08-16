@@ -147,6 +147,25 @@ export function Notice({
     </div>
   );
 }
+
+export const PAGE_SIZE_OPTIONS = [5, 10, 30, 50, 100] as const;
+
+export function paginationWindow(
+  totalPages: number,
+  currentPage: number,
+  windowSize = 5,
+): number[] {
+  const safeTotal = Math.max(1, Math.floor(totalPages));
+  const safeSize = Math.max(1, Math.min(safeTotal, Math.floor(windowSize)));
+  const safeCurrent = Math.min(safeTotal, Math.max(1, Math.floor(currentPage)));
+  const half = Math.floor(safeSize / 2);
+  const start = Math.min(
+    Math.max(1, safeCurrent - half),
+    safeTotal - safeSize + 1,
+  );
+  return Array.from({ length: safeSize }, (_, index) => start + index);
+}
+
 export function Pagination({
   page,
   pageSize,
@@ -162,6 +181,7 @@ export function Pagination({
 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const currentPage = Math.min(totalPages, Math.max(1, page));
+  const visiblePages = paginationWindow(totalPages, currentPage);
   const [jump, setJump] = useState(String(currentPage));
   useEffect(() => setJump(String(currentPage)), [currentPage]);
   useEffect(() => {
@@ -175,7 +195,7 @@ export function Pagination({
     );
   }
   return (
-    <div className="pagination">
+    <nav className="pagination" aria-label="列表分页">
       <div className="pagination-summary">
         <span>共 {total} 条</span>
         <label>
@@ -184,7 +204,7 @@ export function Pagination({
             value={pageSize}
             onChange={(event) => onPageSizeChange(Number(event.target.value))}
           >
-            {[5, 10, 30, 50, 100].map((value) => (
+            {PAGE_SIZE_OPTIONS.map((value) => (
               <option key={value} value={value}>
                 {value}
               </option>
@@ -208,6 +228,20 @@ export function Pagination({
         >
           上一页
         </button>
+        <div className="pagination-pages" aria-label="页码">
+          {visiblePages.map((value) => (
+            <button
+              type="button"
+              className={value === currentPage ? "active" : ""}
+              aria-current={value === currentPage ? "page" : undefined}
+              aria-label={`第 ${value} 页`}
+              key={value}
+              onClick={() => onPageChange(value)}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
         <span>
           第 {currentPage} / {totalPages} 页
         </span>
@@ -238,7 +272,7 @@ export function Pagination({
           <button type="submit">跳转</button>
         </form>
       </div>
-    </div>
+    </nav>
   );
 }
 export function translate(value: string): string {

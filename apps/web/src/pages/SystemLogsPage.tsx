@@ -151,6 +151,18 @@ export function SystemLogsPage() {
           </label>
           <small>共 {data.total} 条</small>
         </form>
+        <div className="pagination-top">
+          <Pagination
+            page={data.page}
+            pageSize={data.pageSize}
+            total={data.total}
+            onPageChange={setPage}
+            onPageSizeChange={(value) => {
+              setPageSize(value);
+              setPage(1);
+            }}
+          />
+        </div>
         <div className="table-wrap">
           <table>
             <thead>

@@ -154,6 +154,18 @@ export function LogsPage() {
           </label>
           <span>共 {data.total} 条</span>
         </div>
+        <div className="pagination-top">
+          <Pagination
+            page={data.page}
+            pageSize={data.pageSize}
+            total={data.total}
+            onPageChange={setPage}
+            onPageSizeChange={(value) => {
+              setPageSize(value);
+              setPage(1);
+            }}
+          />
+        </div>
         <div className="table-wrap">
           <table>
             <thead>

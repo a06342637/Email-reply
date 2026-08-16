@@ -70,6 +70,18 @@ export function AlertsPage() {
             </select>
           </label>
         </div>
+        <div className="pagination-top">
+          <Pagination
+            page={data.page}
+            pageSize={data.pageSize}
+            total={data.total}
+            onPageChange={setPage}
+            onPageSizeChange={(value) => {
+              setPageSize(value);
+              setPage(1);
+            }}
+          />
+        </div>
       </Card>
       <div className="alert-list">
         {data.items.map((a) => (

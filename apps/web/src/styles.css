@@ -1292,16 +1292,52 @@ td small {
   margin-top: 17px;
   flex-wrap: wrap;
 }
+.pagination-top {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.pagination-top .pagination {
+  margin-top: 14px;
+}
 .pagination button {
   height: 34px;
 }
 .pagination-summary,
 .pagination-controls,
+.pagination-pages,
 .pagination-controls form,
 .pagination-summary label {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.pagination-summary {
+  flex: 0 0 auto;
+}
+.pagination-summary label,
+.pagination-controls span {
+  white-space: nowrap;
+}
+.pagination-summary label {
+  flex-direction: row;
+}
+.pagination-controls {
+  flex: 1 1 620px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.pagination-pages {
+  gap: 5px;
+}
+.pagination-pages button {
+  min-width: 34px;
+  padding-inline: 8px;
+}
+.pagination-pages button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .pagination-summary,
 .pagination-controls span {
