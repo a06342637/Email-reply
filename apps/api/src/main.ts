@@ -19,7 +19,7 @@ app.use(cookieParser());
 app.use(
   helmet({
     contentSecurityPolicy: {
-      directives: contentSecurityPolicyDirectives(config.publicUrl),
+      directives: contentSecurityPolicyDirectives(),
     },
     crossOriginEmbedderPolicy: false,
   }),

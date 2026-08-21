@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { Request } from "express";
 import {
   AppConfig,
   contentSecurityPolicyDirectives,
   normalizePublicUrl,
+  requestPublicOrigin,
 } from "./config.js";
 
 describe("normalizePublicUrl", () => {
@@ -33,22 +35,84 @@ describe("normalizePublicUrl", () => {
 });
 
 describe("contentSecurityPolicyDirectives", () => {
-  it("drops upgrade-insecure-requests when the instance is reached over plain HTTP", () => {
+  it("never sends upgrade-insecure-requests so plain HTTP access keeps working", () => {
     // Helmet keeps upgrade-insecure-requests through useDefaults. On an IP-only
     // deployment it rewrites the same-origin bundle requests to an HTTPS port
-    // that does not exist, which leaves the operator with a blank page.
-    const directives = contentSecurityPolicyDirectives("");
+    // that does not exist, which leaves the operator with a blank page. The
+    // frontend only loads same-origin relative assets, so the directive has no
+    // mixed content to protect when the console is opened over HTTPS.
+    const directives = contentSecurityPolicyDirectives();
     expect(directives.upgradeInsecureRequests).toBeNull();
     expect(directives.scriptSrc).toEqual(["'self'"]);
     expect(directives.frameAncestors).toEqual(["'none'"]);
+    expect(directives.objectSrc).toEqual(["'none'"]);
+  });
+});
+
+describe("requestPublicOrigin", () => {
+  const request = (headers: Record<string, string>, secure = false): Request =>
+    ({
+      secure,
+      header: (name: string) => headers[name.toLowerCase()],
+    }) as unknown as Request;
+
+  it("derives the origin a reverse proxy or tunnel forwarded", () => {
+    expect(
+      requestPublicOrigin(
+        request({
+          host: "mail.example.com",
+          "x-forwarded-proto": "https",
+        }),
+      ),
+    ).toBe("https://mail.example.com");
   });
 
-  it("keeps the helmet default once an HTTPS public URL is configured", () => {
-    const directives = contentSecurityPolicyDirectives(
-      "https://mail.example.com",
+  it("prefers the forwarded host and keeps a non-default port", () => {
+    expect(
+      requestPublicOrigin(
+        request({
+          host: "127.0.0.1:8080",
+          "x-forwarded-host": "mail.example.com:8443",
+          "x-forwarded-proto": "https",
+        }),
+      ),
+    ).toBe("https://mail.example.com:8443");
+  });
+
+  it("reads only the first hop of a forwarded header chain", () => {
+    expect(
+      requestPublicOrigin(
+        request({
+          host: "mail.example.com",
+          "x-forwarded-proto": "https, http",
+          "x-forwarded-host": "mail.example.com, inner.internal",
+        }),
+      ),
+    ).toBe("https://mail.example.com");
+  });
+
+  it("accepts a direct TLS connection without forwarded headers", () => {
+    expect(
+      requestPublicOrigin(request({ host: "mail.example.com" }, true)),
+    ).toBe("https://mail.example.com");
+  });
+
+  it("refuses to derive an origin from plain HTTP access", () => {
+    // OAuth callbacks must never fall back to an http:// redirect URI.
+    expect(requestPublicOrigin(request({ host: "203.0.113.10:8080" }))).toBe(
+      "",
     );
-    expect(directives).not.toHaveProperty("upgradeInsecureRequests");
-    expect(directives.defaultSrc).toEqual(["'self'"]);
+    expect(
+      requestPublicOrigin(
+        request({ host: "mail.example.com", "x-forwarded-proto": "http" }),
+      ),
+    ).toBe("");
+  });
+
+  it("returns an empty origin when no host is present", () => {
+    expect(requestPublicOrigin(request({ "x-forwarded-proto": "https" }))).toBe(
+      "",
+    );
   });
 });
 

@@ -29,8 +29,8 @@ export class MicrosoftController {
   ) {}
 
   @Get("config")
-  getConfig() {
-    return this.microsoft.getConfig();
+  getConfig(@Req() req: Request) {
+    return this.microsoft.getConfig(req);
   }
 
   @Patch("config")
@@ -101,6 +101,7 @@ export class MicrosoftController {
     const result = await this.microsoft.startOAuth(
       body.appConfigId,
       body.redirectAfter,
+      req,
     );
     await this.audit.write("MICROSOFT_OAUTH_STARTED", req, undefined, {
       appConfigId: body.appConfigId,
@@ -139,7 +140,7 @@ export class MicrosoftController {
     @Req() req: Request,
     @Res() res: Response,
   ) {
-    const publicUrl = await this.microsoft.publicUrl();
+    const publicUrl = await this.microsoft.publicUrl(req);
     const fallbackUrl = publicUrl || "/";
     if (error || !code || !state) {
       await this.audit
@@ -158,7 +159,7 @@ export class MicrosoftController {
       );
     }
     try {
-      const result = await this.microsoft.finishOAuth(code, state);
+      const result = await this.microsoft.finishOAuth(code, state, req);
       await this.audit
         .write("MICROSOFT_MAILBOX_CONNECTED", req, {
           type: "Mailbox",

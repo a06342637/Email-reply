@@ -45,6 +45,7 @@ MailPilot 是一套面向 Debian 12/13 的 Docker 化邮箱自动回复系统。
 - Microsoft 支持 Outlook/Hotmail 个人邮箱和全球版 Microsoft 365 用户邮箱。
 - Google 支持 Gmail 个人邮箱和 Google Workspace 用户邮箱。
 - Microsoft 邮箱支持 OAuth 2.0 Authorization Code + PKCE 网页登录（推荐），也支持 Client ID + Refresh Token 高级导入。
+- HTTPS 公开地址与 OAuth 回调地址按管理员访问后台所用的域名自动识别，不需要写进配置文件；换域名无需改配置，也可手工固定为指定域名。
 - Microsoft Graph 和 Google Cloud / Gmail API 均可保存多套应用配置；添加或重新授权邮箱时选择对应应用，凭据和影响范围彼此隔离。
 - 左侧导航提供独立“SMTP 发件”入口，可保存多套 SMTP 发件配置，并让每个自动回复任务单独选择“邮箱服务商 API”或指定 SMTP 配置；SMTP 密码使用实例主密钥加密。
 - 使用加密的 MSAL Token Cache、Microsoft Refresh Token Cache 或 Google Refresh Token 自动续期，不保存邮箱登录密码。
@@ -181,7 +182,7 @@ sudo ./install.sh
 
 安装时会询问：
 
-- **HTTPS 公开地址**：例如 https://mail.example.com。可以暂时留空；留空时不能使用 Microsoft/Gmail OAuth 网页登录，但仍可通过 Client ID + Refresh Token 导入 Microsoft 邮箱。
+- **HTTPS 公开地址**：例如 https://mail.example.com。**可以直接留空**——留空时系统会按管理员访问后台所用的 HTTPS 域名自动识别，OAuth 回调地址随之生成，换域名也不用改配置。只有需要固定成某个特定域名时才填写。
 - **本机监听端口**：默认 8080。
 - **管理员用户名**：直接回车会随机生成。
 - **管理员密码**：直接回车会随机生成；手工输入至少 12 位。
@@ -221,13 +222,13 @@ sudo NON_INTERACTIVE=1 \
 
 可用的环境变量与交互提问一一对应：
 
-| 变量              | 说明                                     | 留空时的行为   |
-| ----------------- | ---------------------------------------- | -------------- |
-| `NON_INTERACTIVE` | `1` 跳过全部提问，`0` 强制交互           | 按标准输入判断 |
-| `PUBLIC_URL`      | 后台 HTTPS 公开地址，必须是纯 HTTPS 域名 | 留空           |
-| `HOST_PORT`       | 本机监听端口                             | 8080           |
-| `ADMIN_USERNAME`  | 管理员用户名                             | 随机生成       |
-| `ADMIN_PASSWORD`  | 管理员密码，手工指定时至少 12 位         | 随机生成       |
+| 变量              | 说明                             | 留空时的行为   |
+| ----------------- | -------------------------------- | -------------- |
+| `NON_INTERACTIVE` | `1` 跳过全部提问，`0` 强制交互   | 按标准输入判断 |
+| `PUBLIC_URL`      | 后台 HTTPS 公开地址，可选覆盖项  | 按访问域名识别 |
+| `HOST_PORT`       | 本机监听端口                     | 8080           |
+| `ADMIN_USERNAME`  | 管理员用户名                     | 随机生成       |
+| `ADMIN_PASSWORD`  | 管理员密码，手工指定时至少 12 位 | 随机生成       |
 
 交互安装的行为完全不变：在终端直接运行 `sudo ./install.sh` 仍然逐项提问。
 
@@ -261,17 +262,18 @@ curl -fsS http://127.0.0.1:8080/health/ready
 
 Microsoft 与 Google OAuth 回调都必须使用可从浏览器访问的 HTTPS 域名。后台虽然可直接通过 `http://服务器IP:8080` 打开，但生产环境建议改用 HTTPS 域名。
 
+公开地址不需要写进配置文件：反向代理或隧道把请求转发进来时会带上原始主机和 `X-Forwarded-Proto`，系统据此按管理员当前访问后台所用的 HTTPS 域名自动识别公开地址，并生成 OAuth 回调地址。换域名后无需修改任何配置，只要把新的回调地址登记到 Entra / Google 应用即可。只有需要把公开地址固定成某个特定域名时，才在 `.env` 里设置 `PUBLIC_URL`，或在后台设置页填写。
+
 下面以 Nginx 和域名 mail.example.com 为例。
 
 反向代理启用后修改 `.env`：
 
 ```dotenv
 HOST_BIND=127.0.0.1
-PUBLIC_URL=https://mail.example.com
 TRUST_PROXY=1
 ```
 
-然后重建 app 容器：
+`TRUST_PROXY=1` 让登录限速和审计日志记录真实客户端 IP 而不是反向代理的本地地址。然后重建 app 容器：
 
 ```bash
 docker compose up -d --force-recreate app
@@ -356,11 +358,13 @@ sudo certbot --nginx -d mail.example.com
 https://mail.example.com
 ```
 
-如果安装时没有填写公开地址，登录后台后进入：
+如果安装时没有填写公开地址，不需要做任何事：通过 https://mail.example.com 打开后台后，系统会自动识别该域名并生成 OAuth 回调地址。
+
+只有需要把公开地址固定成其他域名时，才登录后台进入：
 
 **系统设置 → Microsoft（或 Google / Gmail）→ HTTPS 公开地址**
 
-填写 https://mail.example.com 并保存。
+填写 https://mail.example.com 并保存。留空即代表继续使用自动识别。
 
 ### 5. 用 Cloudflare Tunnel 代替 Nginx
 
@@ -400,11 +404,10 @@ sudo journalctl -u cloudflared -n 50 --no-pager
 
 ```dotenv
 HOST_BIND=127.0.0.1
-PUBLIC_URL=https://mail.example.com
 TRUST_PROXY=1
 ```
 
-`HOST_BIND=127.0.0.1` 让 8080 只监听本机，公网只能经由隧道访问；`TRUST_PROXY=1` 让登录限速和审计日志记录真实客户端 IP 而不是隧道的本地地址。改完重建 app 容器：
+`HOST_BIND=127.0.0.1` 让 8080 只监听本机，公网只能经由隧道访问；`TRUST_PROXY=1` 让登录限速和审计日志记录真实客户端 IP 而不是隧道的本地地址。公开地址不用填，系统会按你访问的隧道域名自动识别。改完重建 app 容器：
 
 ```bash
 docker compose up -d --force-recreate app
@@ -519,7 +522,7 @@ MailPilot 使用的是 **Delegated permissions**，不是 Application permission
 - Client Secret Value。
 - Secret 到期日期。
 
-可以重复添加多套应用。随后单独填写并保存 HTTPS 公开地址；所有 Microsoft Web 应用使用同一个回调路径，但每套 Entra 应用都必须登记该回调地址。
+可以重复添加多套应用。公开地址默认按访问域名自动识别，不需要填写；所有 Microsoft Web 应用使用同一个回调路径，但每套 Entra 应用都必须登记该回调地址。
 
 保存后 Client Secret 不会再次显示原文，只能替换。
 
@@ -616,7 +619,7 @@ https://mail.example.com/api/v1/google/oauth/callback
 - OAuth Client ID，通常以 `.apps.googleusercontent.com` 结尾。
 - Client Secret。
 
-可以重复添加多套应用。随后单独填写并保存 HTTPS 公开地址；每套 Google Web OAuth Client 都必须登记同一个 Google 回调地址。
+可以重复添加多套应用。公开地址默认按访问域名自动识别，不需要填写；每套 Google Web OAuth Client 都必须登记同一个 Google 回调地址。
 
 保存后 Client Secret 不再显示原文，只能替换。连接 Gmail 时选择要使用的应用。修改某套应用的 Client ID 只会暂停绑定该应用的 Gmail 任务并要求重新授权；只替换同一客户端的 Secret 时，系统会先尝试刷新绑定邮箱。仍有邮箱使用的应用不能删除。
 
@@ -682,7 +685,7 @@ docker compose logs app
 
 ## 连接邮箱
 
-Gmail 和 Microsoft OAuth 网页登录需要先配置 HTTPS 公开地址，并至少保存一套对应的应用。Microsoft Client ID + Refresh Token 导入不依赖回调地址，也不使用 Microsoft Client Secret。
+Gmail 和 Microsoft OAuth 网页登录需要通过 HTTPS 域名打开后台（公开地址会自动识别），并至少保存一套对应的应用。Microsoft Client ID + Refresh Token 导入不依赖回调地址，也不使用 Microsoft Client Secret。
 
 ### 连接 Microsoft 邮箱
 
@@ -1395,11 +1398,13 @@ cat VERSION
 
 ### 1. OAuth 提示 redirect_uri 不匹配
 
-检查以下三处必须完全一致：
+公开地址默认按浏览器实际访问的域名自动识别，因此正常情况下只需保证一件事：**Entra 或 Google Cloud OAuth Client 中登记的 Web Redirect URI，与后台设置页显示的「OAuth 回调地址」完全一致**。
 
-- Entra 或 Google Cloud OAuth Client 中的 Web Redirect URI。
-- MailPilot 系统设置中的 HTTPS 公开地址。
-- 浏览器实际访问域名。
+仍然不匹配时按顺序检查：
+
+- 后台设置页显示的 OAuth 回调地址，是否已原样登记到 Entra / Google Cloud。
+- 是否在系统设置或 `.env` 里手工固定过公开地址，而它与当前访问域名不同。留空即恢复自动识别。
+- 反向代理或隧道是否正确转发了原始 Host 与 `X-Forwarded-Proto`。
 
 Microsoft 正确格式：
 

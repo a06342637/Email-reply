@@ -83,6 +83,7 @@ export type ProviderConfig = {
   configured: boolean;
   apps: ProviderAppConfig[];
   publicUrl: string;
+  publicUrlAutoDetected?: boolean;
   callbackUrl: string;
   scopes: string[];
 };

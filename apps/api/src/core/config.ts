@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { createHash } from "node:crypto";
+import type { Request } from "express";
 
 function integer(name: string, fallback: number): number {
   const value = process.env[name];
@@ -30,9 +31,10 @@ export function normalizePublicUrl(value: string): string {
   return parsed.origin;
 }
 
-export function contentSecurityPolicyDirectives(
-  publicUrl: string,
-): Record<string, string[] | null> {
+export function contentSecurityPolicyDirectives(): Record<
+  string,
+  string[] | null
+> {
   return {
     defaultSrc: ["'self'"],
     styleSrc: ["'self'", "'unsafe-inline'"],
@@ -41,12 +43,30 @@ export function contentSecurityPolicyDirectives(
     scriptSrc: ["'self'"],
     objectSrc: ["'none'"],
     frameAncestors: ["'none'"],
-    // 没有配置 HTTPS 公开地址时，实例按 IP 直连的明文 HTTP 使用。Helmet 通过
-    // useDefaults 附带的 upgrade-insecure-requests 会让浏览器把首页引用的同源
-    // JS 与 CSS 升级到并不存在的 HTTPS 端口，请求全部失败后只剩空白页面，
-    // 因此这种部署下移除该指令；配置了 HTTPS 公开地址时保持 Helmet 默认。
-    ...(publicUrl ? {} : { upgradeInsecureRequests: null }),
+    // 后台既可能通过 HTTPS 域名打开，也可能通过 IP 直连的明文 HTTP 打开。
+    // Helmet 通过 useDefaults 附带的 upgrade-insecure-requests 会让浏览器把首页
+    // 引用的同源 JS 与 CSS 升级到并不存在的 HTTPS 端口，明文访问时只剩空白页面。
+    // 前端只使用同源相对路径资源，通过 HTTPS 打开时这些请求天然就是 HTTPS，
+    // 该指令没有可保护的混合内容，因此统一不下发。
+    upgradeInsecureRequests: null,
   };
+}
+
+// 实例不再要求预先配置公开地址：没有显式配置时，按管理员当前访问后台所用的
+// 协议与主机推导出公开来源。反向代理与 Cloudflare Tunnel 都会转发原始主机，
+// 并用 X-Forwarded-Proto 标出外层协议。只有 HTTPS 来源会被接受，OAuth 回调
+// 因此不会退回到明文地址。
+export function requestPublicOrigin(req: Request): string {
+  const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || req.header("host")?.trim();
+  if (!host) return "";
+  const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0]?.trim();
+  const protocol = forwardedProto || (req.secure ? "https" : "http");
+  try {
+    return normalizePublicUrl(`${protocol}://${host}`);
+  } catch {
+    return "";
+  }
 }
 
 @Injectable()

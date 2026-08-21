@@ -3,7 +3,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { ResponseMode } from "@azure/msal-node";
 import { PrismaService } from "../core/prisma.js";
 import { CryptoService } from "../core/crypto.js";
-import { AppConfig, normalizePublicUrl } from "../core/config.js";
+import {
+  AppConfig,
+  normalizePublicUrl,
+  requestPublicOrigin,
+} from "../core/config.js";
+import type { Request } from "express";
 import { AppError } from "../core/http.js";
 import {
   GraphError,
@@ -44,8 +49,8 @@ export class MicrosoftService {
     private readonly alerts: AlertService,
   ) {}
 
-  async getConfig() {
-    const [apps, publicUrl] = await Promise.all([
+  async getConfig(req?: Request) {
+    const [apps, configuredPublicUrl, effectivePublicUrl] = await Promise.all([
       this.prisma.microsoftAppConfig.findMany({
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         include: {
@@ -56,7 +61,8 @@ export class MicrosoftService {
           },
         },
       }),
-      this.publicUrl(),
+      this.configuredPublicUrl(),
+      this.publicUrl(req),
     ]);
     const first = apps[0];
     return {
@@ -67,8 +73,11 @@ export class MicrosoftService {
       clientId: first?.clientId ?? "",
       hasClientSecret: Boolean(first?.clientSecretEncrypted),
       secretExpiresAt: first?.secretExpiresAt,
-      publicUrl,
-      callbackUrl: `${publicUrl || "https://your-domain.example"}/api/v1/microsoft/oauth/callback`,
+      // 显式配置值，留空代表按访问地址自动推导。
+      publicUrl: configuredPublicUrl,
+      publicUrlAutoDetected:
+        !configuredPublicUrl && Boolean(effectivePublicUrl),
+      callbackUrl: `${effectivePublicUrl || "https://your-domain.example"}/api/v1/microsoft/oauth/callback`,
       scopes: OAUTH_SCOPES,
     };
   }
@@ -301,12 +310,13 @@ export class MicrosoftService {
   async startOAuth(
     appConfigId: string,
     redirectAfter = "/mailboxes",
+    req?: Request,
   ): Promise<{ authorizationUrl: string }> {
-    const publicUrl = await this.publicUrl();
+    const publicUrl = await this.publicUrl(req);
     if (!publicUrl || !publicUrl.startsWith("https://")) {
       throw new AppError(
         "PUBLIC_URL_REQUIRED",
-        "连接 Microsoft 前必须配置 HTTPS 公开地址",
+        "连接 Microsoft 需要 HTTPS 公开地址。请通过 HTTPS 域名打开后台后重试，或在设置中手工填写公开地址。",
         409,
       );
     }
@@ -359,6 +369,7 @@ export class MicrosoftService {
   async finishOAuth(
     code: string,
     combinedState: string,
+    req?: Request,
   ): Promise<{ redirectTo: string; mailboxId: string }> {
     const separator = combinedState.indexOf(".");
     if (separator < 1)
@@ -387,7 +398,7 @@ export class MicrosoftService {
         "授权使用的 Microsoft 应用已被删除，请重新连接",
         409,
       );
-    const publicUrl = await this.publicUrl();
+    const publicUrl = await this.publicUrl(req);
     const verifier = await this.crypto.decryptString(
       state.verifierEncrypted,
       `oauth:${id}`,
@@ -984,7 +995,10 @@ export class MicrosoftService {
     };
   }
 
-  async publicUrl(): Promise<string> {
+  // 管理员显式配置的公开地址，没有配置时为空字符串。设置页用它回填输入框，
+  // 留空即代表交给自动推导，不能用推导结果回填，否则一次保存就会把自动模式
+  // 固化成硬编码地址。
+  private async configuredPublicUrl(): Promise<string> {
     const setting = await this.prisma.systemSetting.findUnique({
       where: { key: "publicUrl" },
     });
@@ -995,7 +1009,14 @@ export class MicrosoftService {
     try {
       return normalizePublicUrl(value);
     } catch {
+      // 显式配置留下了无效值时不要卡死连接流程，继续按当前请求推导。
       return "";
     }
+  }
+
+  async publicUrl(req?: Request): Promise<string> {
+    const configured = await this.configuredPublicUrl();
+    if (configured) return configured;
+    return req ? requestPublicOrigin(req) : "";
   }
 }

@@ -28,8 +28,8 @@ export class GoogleController {
   ) {}
 
   @Get("config")
-  getConfig() {
-    return this.google.getConfig();
+  getConfig(@Req() req: Request) {
+    return this.google.getConfig(req);
   }
 
   @Patch("config")
@@ -100,6 +100,7 @@ export class GoogleController {
     const result = await this.google.startOAuth(
       body.appConfigId,
       body.redirectAfter,
+      req,
     );
     await this.audit.write("GOOGLE_OAUTH_STARTED", req, undefined, {
       appConfigId: body.appConfigId,
@@ -116,7 +117,7 @@ export class GoogleController {
     @Req() req: Request,
     @Res() res: Response,
   ) {
-    const publicUrl = await this.google.publicUrl();
+    const publicUrl = await this.google.publicUrl(req);
     const fallbackUrl = publicUrl || "/";
     if (error || !code || !state) {
       await this.audit
@@ -132,7 +133,7 @@ export class GoogleController {
       );
     }
     try {
-      const result = await this.google.finishOAuth(code, state);
+      const result = await this.google.finishOAuth(code, state, req);
       await this.audit
         .write("GOOGLE_MAILBOX_CONNECTED", req, {
           type: "Mailbox",

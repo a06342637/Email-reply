@@ -504,7 +504,7 @@ export function SettingsPage() {
                 <input
                   value={ms.publicUrl || ""}
                   onChange={(e) => setMs({ ...ms, publicUrl: e.target.value })}
-                  placeholder="https://mail.example.com"
+                  placeholder="留空自动识别当前访问域名"
                 />
               </label>
               <button
@@ -518,6 +518,13 @@ export function SettingsPage() {
               <span>OAuth 回调地址</span>
               <code>{ms.callbackUrl}</code>
             </div>
+            {ms.publicUrlAutoDetected && (
+              <p className="permission-help">
+                公开地址已按你当前访问后台所用的 HTTPS
+                域名自动识别，无需在配置文件里指定。把上面的回调地址登记到 Entra
+                应用即可；只有需要固定为其他域名时才填写上面的输入框。
+              </p>
+            )}
             <h3>系统请求的完整 Microsoft 权限</h3>
             <div className="scope-list">
               {ms.scopes.map((s: string) => (
@@ -610,7 +617,7 @@ export function SettingsPage() {
                   onChange={(e) =>
                     setGoogle({ ...google, publicUrl: e.target.value })
                   }
-                  placeholder="https://mail.example.com"
+                  placeholder="留空自动识别当前访问域名"
                 />
               </label>
               <button
@@ -624,6 +631,14 @@ export function SettingsPage() {
               <span>OAuth 回调地址</span>
               <code>{google.callbackUrl}</code>
             </div>
+            {google.publicUrlAutoDetected && (
+              <p className="permission-help">
+                公开地址已按你当前访问后台所用的 HTTPS
+                域名自动识别，无需在配置文件里指定。把上面的回调地址登记到
+                Google OAuth Web Client
+                即可；只有需要固定为其他域名时才填写上面的输入框。
+              </p>
+            )}
             <h3>系统请求的完整 Google 权限</h3>
             <div className="scope-list">
               {google.scopes.map((scope: string) => (

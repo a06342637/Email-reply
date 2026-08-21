@@ -146,7 +146,7 @@ echo "-----------------------------------------"
 if (( NON_INTERACTIVE )); then
   echo "非交互模式：未提供的配置使用默认值，管理员凭据随机生成。"
 fi
-prompt_value PUBLIC_URL "后台 HTTPS 公开地址（可留空，留空时暂不能连接 Microsoft 或 Gmail）: " ""
+prompt_value PUBLIC_URL "后台 HTTPS 公开地址（可留空，留空时按访问域名自动识别）: " ""
 if [[ -n "$PUBLIC_URL" && ! "$PUBLIC_URL" =~ ^https://[^/@?#[:space:]]+/?$ ]]; then
   echo "公开地址必须是纯 HTTPS 域名（可含端口），不能包含路径、查询参数或账号信息"
   exit 1
@@ -252,7 +252,8 @@ else
 fi
 echo "本机健康检查：http://127.0.0.1:$HOST_PORT/health/ready"
 [[ -n "$PUBLIC_URL" ]] && echo "公开地址：$PUBLIC_URL"
-echo "提示：IP 直连使用明文 HTTP；Microsoft/Google OAuth 仍需要 HTTPS 域名。"
+echo "提示：IP 直连使用明文 HTTP；Microsoft/Google OAuth 需要通过 HTTPS 域名打开后台，"
+echo "     公开地址会按访问域名自动识别，不需要写进配置文件。"
 if [[ "$RANDOM_USERNAME" == true || "$RANDOM_PASSWORD" == true ]]; then
   echo ""
   echo "随机管理员凭据（也会在 app 首次日志中仅显示一次）："
