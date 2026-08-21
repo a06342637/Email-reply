@@ -6,7 +6,7 @@ import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import express from "express";
 import { AppModule } from "./app.module.js";
-import { AppConfig } from "./core/config.js";
+import { AppConfig, contentSecurityPolicyDirectives } from "./core/config.js";
 import { GlobalExceptionFilter } from "./core/http.js";
 
 const app = await NestFactory.create(AppModule, { bodyParser: false });
@@ -19,15 +19,7 @@ app.use(cookieParser());
 app.use(
   helmet({
     contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:", "blob:", "cid:"],
-        connectSrc: ["'self'"],
-        scriptSrc: ["'self'"],
-        objectSrc: ["'none'"],
-        frameAncestors: ["'none'"],
-      },
+      directives: contentSecurityPolicyDirectives(config.publicUrl),
     },
     crossOriginEmbedderPolicy: false,
   }),

@@ -30,6 +30,25 @@ export function normalizePublicUrl(value: string): string {
   return parsed.origin;
 }
 
+export function contentSecurityPolicyDirectives(
+  publicUrl: string,
+): Record<string, string[] | null> {
+  return {
+    defaultSrc: ["'self'"],
+    styleSrc: ["'self'", "'unsafe-inline'"],
+    imgSrc: ["'self'", "data:", "blob:", "cid:"],
+    connectSrc: ["'self'"],
+    scriptSrc: ["'self'"],
+    objectSrc: ["'none'"],
+    frameAncestors: ["'none'"],
+    // 没有配置 HTTPS 公开地址时，实例按 IP 直连的明文 HTTP 使用。Helmet 通过
+    // useDefaults 附带的 upgrade-insecure-requests 会让浏览器把首页引用的同源
+    // JS 与 CSS 升级到并不存在的 HTTPS 端口，请求全部失败后只剩空白页面，
+    // 因此这种部署下移除该指令；配置了 HTTPS 公开地址时保持 Helmet 默认。
+    ...(publicUrl ? {} : { upgradeInsecureRequests: null }),
+  };
+}
+
 @Injectable()
 export class AppConfig {
   readonly nodeEnv = process.env.NODE_ENV ?? "development";

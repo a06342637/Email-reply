@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { AppConfig, normalizePublicUrl } from "./config.js";
+import {
+  AppConfig,
+  contentSecurityPolicyDirectives,
+  normalizePublicUrl,
+} from "./config.js";
 
 describe("normalizePublicUrl", () => {
   it("accepts an HTTPS origin and removes a trailing slash", () => {
@@ -25,6 +29,26 @@ describe("normalizePublicUrl", () => {
     expect(() => normalizePublicUrl(value)).toThrow(
       "PUBLIC_URL must be a valid HTTPS origin",
     );
+  });
+});
+
+describe("contentSecurityPolicyDirectives", () => {
+  it("drops upgrade-insecure-requests when the instance is reached over plain HTTP", () => {
+    // Helmet keeps upgrade-insecure-requests through useDefaults. On an IP-only
+    // deployment it rewrites the same-origin bundle requests to an HTTPS port
+    // that does not exist, which leaves the operator with a blank page.
+    const directives = contentSecurityPolicyDirectives("");
+    expect(directives.upgradeInsecureRequests).toBeNull();
+    expect(directives.scriptSrc).toEqual(["'self'"]);
+    expect(directives.frameAncestors).toEqual(["'none'"]);
+  });
+
+  it("keeps the helmet default once an HTTPS public URL is configured", () => {
+    const directives = contentSecurityPolicyDirectives(
+      "https://mail.example.com",
+    );
+    expect(directives).not.toHaveProperty("upgradeInsecureRequests");
+    expect(directives.defaultSrc).toEqual(["'self'"]);
   });
 });
 
