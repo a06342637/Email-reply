@@ -174,9 +174,10 @@ sudo ./install.sh
 1. 检查系统是否为 Debian 12/13。
 2. 安装 CA 证书、curl、jq、OpenSSL 和必要工具。
 3. 缺少 Docker 时，使用 Docker 官方 Debian 软件源安装 Docker Engine、Buildx 和 Compose Plugin。
-4. 生成 PostgreSQL 密码、实例主密钥、会话密钥和在线升级内部密钥。
-5. 构建并启动全部容器。
-6. 从 VERSION 自动写入应用和镜像版本号，并等待 app、Redis、PostgreSQL、worker 和 updater 通过健康检查。
+4. 预检上次安装残留的数据卷和本机监听端口，避免安装到一半才失败。
+5. 生成 PostgreSQL 密码、实例主密钥、会话密钥和在线升级内部密钥。
+6. 构建并启动全部容器。
+7. 从 VERSION 自动写入应用和镜像版本号，并等待 app、Redis、PostgreSQL、worker 和 updater 通过健康检查。
 
 安装时会询问：
 
@@ -194,6 +195,41 @@ sudo ./install.sh
 手工输入的管理员密码不会写入 Docker 日志。
 
 安装脚本检测到已有 .env 时会停止，避免覆盖数据库密码和实例主密钥。升级已有实例请使用 update.sh。
+
+安装中途失败（构建失败、端口被占用、健康检查超时等）时，脚本会自动删除本次写入的 .env 和本次新建的数据卷，直接重新运行 `sudo ./install.sh` 重试即可，不需要手工清理。
+
+### 2.1 非交互安装
+
+在自动化部署、CI 或远程脚本里可以跳过全部提问。显式设置 `NON_INTERACTIVE=1`，或让标准输入不是终端时脚本会自动启用非交互模式：
+
+```bash
+sudo NON_INTERACTIVE=1 ./install.sh
+```
+
+非交互模式下未提供的配置使用默认值，管理员用户名和密码随机生成，凭据同样打印在安装输出和 app 首次日志中。
+
+需要指定配置时用环境变量覆盖，未设置的项仍走默认值：
+
+```bash
+sudo NON_INTERACTIVE=1 \
+  PUBLIC_URL=https://mail.example.com \
+  HOST_PORT=8080 \
+  ADMIN_USERNAME=admin \
+  ADMIN_PASSWORD='至少12位的密码' \
+  ./install.sh
+```
+
+可用的环境变量与交互提问一一对应：
+
+| 变量              | 说明                                     | 留空时的行为   |
+| ----------------- | ---------------------------------------- | -------------- |
+| `NON_INTERACTIVE` | `1` 跳过全部提问，`0` 强制交互           | 按标准输入判断 |
+| `PUBLIC_URL`      | 后台 HTTPS 公开地址，必须是纯 HTTPS 域名 | 留空           |
+| `HOST_PORT`       | 本机监听端口                             | 8080           |
+| `ADMIN_USERNAME`  | 管理员用户名                             | 随机生成       |
+| `ADMIN_PASSWORD`  | 管理员密码，手工指定时至少 12 位         | 随机生成       |
+
+交互安装的行为完全不变：在终端直接运行 `sudo ./install.sh` 仍然逐项提问。
 
 安装完成后可直接打开：
 
@@ -325,6 +361,54 @@ https://mail.example.com
 **系统设置 → Microsoft（或 Google / Gmail）→ HTTPS 公开地址**
 
 填写 https://mail.example.com 并保存。
+
+### 5. 用 Cloudflare Tunnel 代替 Nginx
+
+不想开放 80/443 端口或服务器没有公网 IP 时，可以用 Cloudflare Tunnel 把后台发布到 HTTPS 域名，证书由 Cloudflare 签发和续期，不需要 Nginx 和 Certbot。
+
+在服务器上安装 cloudflared：
+
+```bash
+sudo mkdir -p --mode=0755 /usr/share/keyrings
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt-get update && sudo apt-get install -y cloudflared
+```
+
+用 Zero Trust 后台创建隧道时给出的 token 注册为系统服务：
+
+```bash
+sudo cloudflared service install <隧道 token>
+```
+
+隧道连上以后还必须在 Cloudflare 后台配置公开主机名，否则所有请求都会返回 503：
+
+**Zero Trust → Networks → Tunnels → 选择隧道 → Public Hostname → Add a public hostname**
+
+- **Subdomain / Domain**：填写要对外使用的域名，例如 mail.example.com。
+- **Service Type**：`HTTP`。
+- **URL**：`localhost:8080`，端口与 .env 中的 `HOST_PORT` 一致。
+
+确认服务日志中没有 `No ingress rules were defined` 警告：
+
+```bash
+sudo systemctl status cloudflared
+sudo journalctl -u cloudflared -n 50 --no-pager
+```
+
+然后修改 `.env`：
+
+```dotenv
+HOST_BIND=127.0.0.1
+PUBLIC_URL=https://mail.example.com
+TRUST_PROXY=1
+```
+
+`HOST_BIND=127.0.0.1` 让 8080 只监听本机，公网只能经由隧道访问；`TRUST_PROXY=1` 让登录限速和审计日志记录真实客户端 IP 而不是隧道的本地地址。改完重建 app 容器：
+
+```bash
+docker compose up -d --force-recreate app
+```
 
 ## 注册 Microsoft Entra 应用
 
@@ -1291,6 +1375,14 @@ sudo ./update.sh
 
 如果新版本包含不兼容数据库变更，镜像回滚后还可能需要使用升级前 .mpbak 备份恢复数据。升级前请确保备份文件已经复制到安全位置。
 
+非交互升级时用 `BACKUP_PASSPHRASE` 环境变量提供备份口令，跳过两次输入确认：
+
+```bash
+sudo BACKUP_PASSPHRASE='至少12位的备份口令' ./update.sh
+```
+
+标准输入不是终端又没有提供该变量时，脚本会直接报错退出，不会生成没有口令保护的备份。
+
 查看当前版本：
 
 ```bash
@@ -1454,7 +1546,13 @@ docker compose logs --tail=200 postgres redis app worker
 
 ### 13. 8080 端口被占用
 
-修改 .env 中 HOST_PORT，例如：
+安装脚本会在写入配置前预检端口，被占用时直接提示并停止，不会留下半成品实例。换一个空闲端口重装：
+
+```bash
+sudo NON_INTERACTIVE=1 HOST_PORT=8081 ./install.sh
+```
+
+已经安装完成的实例改端口，修改 .env 中 HOST_PORT，例如：
 
 ```text
 HOST_PORT=8081
@@ -1466,7 +1564,7 @@ HOST_PORT=8081
 docker compose up -d
 ```
 
-同时修改 Nginx proxy_pass 指向新的本地端口。
+同时修改 Nginx proxy_pass 或 Cloudflare Tunnel 公开主机名指向新的本地端口。
 
 ### 14. 备份口令忘记
 
@@ -1485,6 +1583,30 @@ docker compose up -d
 - `SMTP_RECIPIENT_REJECTED` / `SMTP_REJECTED`：SMTP 服务明确拒绝收件人或邮件。
 - `SMTP_SEND_STATUS_UNCERTAIN`：连接在 DATA 阶段中断，系统为避免重复邮件不会自动重发。
 - SMTP 已接受但目标邮箱未收到：检查 SPF、DKIM、DMARC、From 是否获授权、发件域名/IP 信誉、退信、隔离区、邮件追踪，以及模板中的链接、图片和营销内容。
+
+### 17. 安装中途失败，重新运行提示“检测到现有 .env”
+
+新版本安装脚本在失败时会自动删除本次写入的 .env 和本次新建的数据卷，直接重新运行 `sudo ./install.sh` 即可。
+
+仍然看到该提示时，说明目录里确实存在一份有效配置。确认当前实例的数据不再需要后再清理：
+
+```bash
+docker compose down -v --remove-orphans
+sudo rm -f .env
+sudo ./install.sh
+```
+
+`docker compose down -v` 会删除数据库和全部业务数据，执行前请先确认已导出备份。
+
+### 18. Cloudflare Tunnel 域名返回 503
+
+隧道进程连上了 Cloudflare，但没有配置公开主机名。检查服务日志：
+
+```bash
+sudo journalctl -u cloudflared -n 50 --no-pager | grep -i ingress
+```
+
+出现 `No ingress rules were defined` 时，到 **Zero Trust → Networks → Tunnels → 选择隧道 → Public Hostname** 添加一条指向 `HTTP` + `localhost:8080` 的记录，详见“用 Cloudflare Tunnel 代替 Nginx”。
 
 ## 安全建议
 

@@ -24,8 +24,83 @@ if [[ -f .env ]]; then
   exit 1
 fi
 
+# 非交互安装：显式设置 NON_INTERACTIVE=1，或标准输入不是终端时自动启用。
+# 非交互模式下未提供的配置一律使用默认值，管理员用户名和密码随机生成。
+if [[ -z "${NON_INTERACTIVE:-}" ]]; then
+  if [[ -t 0 ]]; then NON_INTERACTIVE=0; else NON_INTERACTIVE=1; fi
+fi
+if [[ ! "$NON_INTERACTIVE" =~ ^[01]$ ]]; then
+  echo "NON_INTERACTIVE 只能是 0 或 1"
+  exit 1
+fi
+
+PROJECT_NAME=$(awk 'NR<=20 && /^name:[[:space:]]/ {
+  sub(/^name:[[:space:]]*/, "")
+  sub(/[[:space:]]*$/, "")
+  print
+  exit
+}' compose.yml)
+if [[ -z "$PROJECT_NAME" ]]; then
+  echo "无法从 compose.yml 解析 Compose 项目名"
+  exit 1
+fi
+
+# 安装未走完时回滚本次创建的资源，避免残留 .env 让重试被开头的检查直接拒绝。
+INSTALL_COMPLETE=0
+ENV_CREATED=0
+rollback() {
+  (( INSTALL_COMPLETE )) && return 0
+  (( ENV_CREATED )) || return 0
+  echo ""
+  echo "安装未完成，正在回滚本次创建的资源..."
+  docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  local leftover
+  leftover=$(docker volume ls --quiet --filter "name=^${PROJECT_NAME}_" 2>/dev/null || true)
+  if [[ -n "$leftover" ]]; then
+    printf '%s\n' "$leftover" | xargs -r docker volume rm -f >/dev/null 2>&1 || true
+  fi
+  rm -f -- "$ROOT_DIR/.env"
+  echo "已删除 .env 和本次新建的数据卷，修复问题后可重新运行 sudo ./install.sh。"
+}
+trap rollback EXIT
+
 random_urlsafe() { openssl rand -hex "$1"; }
 random_base64() { openssl rand -base64 "$1" | tr -d '\n'; }
+
+prompt_value() {
+  # prompt_value <变量名> <提示语> <默认值>
+  local name=$1 prompt=$2 fallback=${3:-} answer=""
+  if [[ -n "${!name:-}" ]]; then return 0; fi
+  if (( NON_INTERACTIVE )); then
+    printf -v "$name" '%s' "$fallback"
+    return 0
+  fi
+  read -r -p "$prompt" answer || answer=""
+  printf -v "$name" '%s' "${answer:-$fallback}"
+}
+
+prompt_secret() {
+  # prompt_secret <变量名> <提示语>
+  local name=$1 prompt=$2 answer=""
+  if [[ -n "${!name:-}" ]]; then return 0; fi
+  if (( NON_INTERACTIVE )); then
+    printf -v "$name" '%s' ""
+    return 0
+  fi
+  read -r -s -p "$prompt" answer || answer=""
+  echo ""
+  printf -v "$name" '%s' "$answer"
+}
+
+port_in_use() {
+  local port=$1
+  if command -v ss >/dev/null 2>&1; then
+    [[ -n $(ss -Hltn "sport = :$port" 2>/dev/null) ]] && return 0
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}\$" && return 0
+  fi
+  return 1
+}
 
 install_docker() {
   . /etc/os-release
@@ -51,19 +126,40 @@ install_docker() {
 
 install_docker
 
+# 全新安装会生成新的 PostgreSQL 密码，无法匹配残留卷里已初始化的数据目录，
+# 与其让 app 在启动后反复认证失败，不如在这里明确停止。
+LEFTOVER_VOLUMES=$(docker volume ls --quiet --filter "name=^${PROJECT_NAME}_" 2>/dev/null || true)
+if [[ -n "$LEFTOVER_VOLUMES" ]]; then
+  echo "检测到上一次安装残留的数据卷："
+  printf '%s\n' "$LEFTOVER_VOLUMES" | sed 's/^/  - /'
+  echo ""
+  echo "全新安装会重新生成数据库密码，无法读取这些卷中已初始化的数据，安装已停止。"
+  echo "确认其中的数据不再需要后，执行下面的命令清理再重试："
+  LEFTOVER_LIST=$(printf '%s ' $LEFTOVER_VOLUMES)
+  echo "  docker volume rm ${LEFTOVER_LIST% }"
+  exit 1
+fi
+
 echo ""
 echo "MailPilot Microsoft 与 Gmail 邮箱自动回复系统安装"
 echo "-----------------------------------------"
-read -r -p "后台 HTTPS 公开地址（可留空，留空时暂不能连接 Microsoft 或 Gmail）: " PUBLIC_URL
+if (( NON_INTERACTIVE )); then
+  echo "非交互模式：未提供的配置使用默认值，管理员凭据随机生成。"
+fi
+prompt_value PUBLIC_URL "后台 HTTPS 公开地址（可留空，留空时暂不能连接 Microsoft 或 Gmail）: " ""
 if [[ -n "$PUBLIC_URL" && ! "$PUBLIC_URL" =~ ^https://[^/@?#[:space:]]+/?$ ]]; then
   echo "公开地址必须是纯 HTTPS 域名（可含端口），不能包含路径、查询参数或账号信息"
   exit 1
 fi
-read -r -p "本机监听端口 [8080]: " HOST_PORT
+prompt_value HOST_PORT "本机监听端口 [8080]: " "8080"
 HOST_PORT=${HOST_PORT:-8080}
 if ! [[ "$HOST_PORT" =~ ^[0-9]+$ ]] || (( HOST_PORT < 1 || HOST_PORT > 65535 )); then echo "端口无效"; exit 1; fi
+if port_in_use "$HOST_PORT"; then
+  echo "本机监听端口 $HOST_PORT 已被占用，请先释放该端口或改用其他端口后重试。"
+  exit 1
+fi
 
-read -r -p "管理员用户名（直接回车随机生成）: " ADMIN_USERNAME
+prompt_value ADMIN_USERNAME "管理员用户名（直接回车随机生成）: " ""
 RANDOM_USERNAME=false
 if [[ -z "$ADMIN_USERNAME" ]]; then ADMIN_USERNAME="admin_$(random_urlsafe 6)"; RANDOM_USERNAME=true; fi
 if [[ ! "$ADMIN_USERNAME" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
@@ -71,8 +167,7 @@ if [[ ! "$ADMIN_USERNAME" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
   exit 1
 fi
 
-read -r -s -p "管理员密码（直接回车随机生成；手工输入至少 12 位）: " ADMIN_PASSWORD
-echo ""
+prompt_secret ADMIN_PASSWORD "管理员密码（直接回车随机生成；手工输入至少 12 位）: "
 RANDOM_PASSWORD=false
 if [[ -z "$ADMIN_PASSWORD" ]]; then
   ADMIN_PASSWORD=$(random_urlsafe 16)
@@ -85,6 +180,7 @@ SESSION_SECRET=$(random_urlsafe 32)
 UPDATER_TOKEN=$(random_urlsafe 32)
 
 umask 077
+ENV_CREATED=1
 cat > .env <<EOF
 NODE_ENV=production
 APP_VERSION=$APP_VERSION
@@ -109,7 +205,12 @@ PROJECT_DIR=$ROOT_DIR
 UPDATER_TOKEN=$UPDATER_TOKEN
 EOF
 
-PROJECT_NAME=$(docker compose config --format json | jq -r '.name')
+COMPOSE_PROJECT_NAME=$(docker compose config --format json | jq -r '.name')
+if [[ -z "$COMPOSE_PROJECT_NAME" || "$COMPOSE_PROJECT_NAME" == null ]]; then
+  echo "无法读取 Compose 项目名"
+  exit 1
+fi
+PROJECT_NAME=$COMPOSE_PROJECT_NAME
 BOOTSTRAP_VOLUME="${PROJECT_NAME}_bootstrap_data"
 docker volume create "$BOOTSTRAP_VOLUME" >/dev/null
 BOOTSTRAP_MOUNT=$(docker volume inspect "$BOOTSTRAP_VOLUME" --format '{{ .Mountpoint }}')
@@ -131,9 +232,15 @@ done
 UPDATER_CONTAINER=$(docker compose ps -q updater || true)
 UPDATER_HEALTH=$([[ -n "$UPDATER_CONTAINER" ]] && docker inspect "$UPDATER_CONTAINER" --format '{{.State.Health.Status}}' 2>/dev/null || true)
 if ! curl -fsS "http://127.0.0.1:$HOST_PORT/health/ready" >/dev/null 2>&1 || [[ "$UPDATER_HEALTH" != healthy ]]; then
-  echo "应用或在线升级器未能在预期时间内启动，请运行 docker compose logs app worker updater migrate 查看原因。"
+  echo "应用或在线升级器未能在预期时间内启动，以下是容器状态和最近日志："
+  echo "----- docker compose ps -a -----"
+  docker compose ps -a || true
+  echo "----- docker compose logs --tail=60 -----"
+  docker compose logs --no-color --tail=60 app worker updater migrate || true
   exit 1
 fi
+
+INSTALL_COMPLETE=1
 
 echo ""
 SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)

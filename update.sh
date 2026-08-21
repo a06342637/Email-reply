@@ -98,18 +98,31 @@ if [[ $(printf '%s\n%s\n' "$OLD_APP_VERSION" "$NEW_APP_VERSION" | sort -V | tail
   exit 1
 fi
 
-read -r -s -p "升级前加密备份口令（至少 12 位）: " BACKUP_PASSPHRASE
-echo
-if (( ${#BACKUP_PASSPHRASE} < 12 )); then
-  echo "备份口令至少 12 位"
-  exit 1
+# 非交互升级：通过 BACKUP_PASSPHRASE 环境变量提供口令，跳过两次输入确认。
+if [[ -n "${BACKUP_PASSPHRASE:-}" ]]; then
+  if (( ${#BACKUP_PASSPHRASE} < 12 )); then
+    echo "备份口令至少 12 位"
+    exit 1
+  fi
+else
+  if [[ ! -t 0 ]]; then
+    echo "标准输入不是终端，无法读取备份口令。"
+    echo "非交互升级请通过 BACKUP_PASSPHRASE 环境变量提供至少 12 位口令。"
+    exit 1
+  fi
+  read -r -s -p "升级前加密备份口令（至少 12 位）: " BACKUP_PASSPHRASE
+  echo
+  if (( ${#BACKUP_PASSPHRASE} < 12 )); then
+    echo "备份口令至少 12 位"
+    exit 1
+  fi
+  read -r -s -p "再次输入备份口令: " BACKUP_CONFIRM
+  echo
+  [[ "$BACKUP_PASSPHRASE" == "$BACKUP_CONFIRM" ]] || {
+    echo "两次口令不一致"
+    exit 1
+  }
 fi
-read -r -s -p "再次输入备份口令: " BACKUP_CONFIRM
-echo
-[[ "$BACKUP_PASSPHRASE" == "$BACKUP_CONFIRM" ]] || {
-  echo "两次口令不一致"
-  exit 1
-}
 
 mkdir -p backups
 chmod 0700 backups
